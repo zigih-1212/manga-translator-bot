@@ -9,10 +9,18 @@ from config import FONTS, FONTS_PATH
 
 FONT_EXTENSIONS = (".ttf", ".otf")
 
+FALLBACK_FONTS = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    "arial.ttf",
+    "Arial.ttf",
+]
+
 if platform.system() == "Windows":
     _CYRILLIC_FALLBACK = os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "Fonts", "arial.ttf")
 else:
-    _CYRILLIC_FALLBACK = "arial.ttf"
+    _CYRILLIC_FALLBACK = next((p for p in FALLBACK_FONTS if os.path.exists(p)), "DejaVuSans.ttf")
 
 
 def _scan_all_fonts() -> list[dict]:
@@ -125,11 +133,16 @@ class TextRenderer:
         return _CYRILLIC_FALLBACK
 
     def _get_cyrillic_fallback(self) -> str:
+        bundled = self.fonts_dir / "DejaVuSans.ttf"
+        if bundled.exists():
+            return str(bundled)
         for font_info in self._scanned_fonts:
             path = str(self.fonts_dir.parent / font_info["path"])
             if self._supports_cyrillic(path):
                 return path
-        return _CYRILLIC_FALLBACK
+        if os.path.exists(_CYRILLIC_FALLBACK):
+            return _CYRILLIC_FALLBACK
+        return str(bundled) if bundled.name else ""
 
     def _fit_text(
         self,
