@@ -12,6 +12,7 @@ from translator.renderer import TextRenderer
 from translator.colab_client import ColabClient
 from translator.inpainter import LaMaInpainter
 from translator.bubbles import get_bubble_bounds, build_mask
+from translator.modal_client import inpaint_batch_sync, MODAL_AVAILABLE
 from cfg import TEMP_DIR
 
 from cfg.memory import save_translations
@@ -310,9 +311,23 @@ class TranslationPipeline:
                         pts = np.array([[(p[0], p[1]) for p in poly]], dtype=np.int32)
                         cv2.fillPoly(mask, pts, 255)
 
-                clean_cv = self.inpainter.inpaint(cv_img, mask)
-                clean_img = Image.fromarray(cv2.cvtColor(clean_cv, cv2.COLOR_BGR2RGB))
-                del cv_img, mask, clean_cv
+                if MODAL_AVAILABLE:
+                    _, img_bytes = cv2.imencode(".png", cv_img)
+                    _, mask_bytes = cv2.imencode(".png", mask)
+                    modal_result = inpaint_batch_sync([img_bytes.tobytes()])
+                    if modal_result:
+                        modal_img = cv2.imdecode(np.frombuffer(modal_result[0], np.uint8), cv2.IMREAD_COLOR)
+                        clean_img = Image.fromarray(cv2.cvtColor(modal_img, cv2.COLOR_BGR2RGB))
+                        del modal_img
+                    else:
+                        clean_cv = self.inpainter.inpaint(cv_img, mask)
+                        clean_img = Image.fromarray(cv2.cvtColor(clean_cv, cv2.COLOR_BGR2RGB))
+                        del clean_cv
+                else:
+                    clean_cv = self.inpainter.inpaint(cv_img, mask)
+                    clean_img = Image.fromarray(cv2.cvtColor(clean_cv, cv2.COLOR_BGR2RGB))
+                    del clean_cv
+                del cv_img, mask
 
                 for bubble_bbox, text, is_bubble in bubble_pairs:
                     try:
