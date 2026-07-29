@@ -1,7 +1,7 @@
 import asyncio
 from pathlib import Path
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page as PlaywrightPage
-from config import WEBFANDOM_ACCESS_TOKEN, WEBFANDOM_REFRESH_TOKEN, CONFIG
+from cfg import WEBFANDOM_ACCESS_TOKEN, WEBFANDOM_REFRESH_TOKEN, CONFIG
 
 
 class WebFandomPublisher:

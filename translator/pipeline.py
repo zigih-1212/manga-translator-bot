@@ -12,9 +12,9 @@ from translator.renderer import TextRenderer
 from translator.colab_client import ColabClient
 from translator.inpainter import LaMaInpainter
 from translator.bubbles import get_bubble_bounds, build_mask
-from config import TEMP_DIR
-from config.memory import save_translations
+from cfg import TEMP_DIR
 
+from cfg.memory import save_translations
 
 def _filter_text_regions(ocr_texts: list[dict], img_w: int, img_h: int) -> list[dict]:
     filtered = []

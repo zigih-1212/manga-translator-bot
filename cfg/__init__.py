@@ -4,12 +4,12 @@ from dotenv import load_dotenv
 import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(BASE_DIR / "config" / ".env")
+load_dotenv(BASE_DIR / "cfg" / ".env")
 load_dotenv(BASE_DIR / ".env")
 
-CONFIG_PATH = BASE_DIR / "config" / "config.json"
-GLOSSARY_PATH = BASE_DIR / "config" / "glossary.json"
-FONTS_PATH = BASE_DIR / "config" / "fonts.json"
+CONFIG_PATH = BASE_DIR / "cfg" / "config.json"
+GLOSSARY_PATH = BASE_DIR / "cfg" / "glossary.json"
+FONTS_PATH = BASE_DIR / "cfg" / "fonts.json"
 
 
 def _load_json(path: Path, default=None):

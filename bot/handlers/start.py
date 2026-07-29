@@ -1,7 +1,7 @@
 from aiogram import Router
 from aiogram.types import Message
 from aiogram.filters import CommandStart, Command
-from config import CONFIG, save_config
+from cfg import CONFIG, save_config
 
 router = Router()
 

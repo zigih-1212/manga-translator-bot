@@ -5,7 +5,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sources.mangadex import MangaDexSource
-from config import CONFIG, CONFIG_PATH
+from cfg import CONFIG, CONFIG_PATH
 
 router = Router()
 mangadex = MangaDexSource()

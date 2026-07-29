@@ -4,7 +4,7 @@ import json
 import re
 import os
 import platform
-from config import FONTS, FONTS_PATH
+from cfg import FONTS, FONTS_PATH
 
 
 FONT_EXTENSIONS = (".ttf", ".otf")

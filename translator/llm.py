@@ -2,9 +2,9 @@ import asyncio
 import json
 import os
 import httpx
-from config import GLOSSARY, CONFIG, COLAB_URL, OPENROUTER_API_KEY, GROQ_API_KEY, GEMINI_API_KEY
-from config.memory import get_context as get_memory_context, get_glossary as get_memory_glossary
+from cfg import GLOSSARY, CONFIG, COLAB_URL, OPENROUTER_API_KEY, GROQ_API_KEY, GEMINI_API_KEY
 
+from cfg.memory import get_context as get_memory_context, get_glossary as get_memory_glossary
 def _get_proxy():
     return (
         os.environ.get("HTTP_PROXY")

@@ -9,7 +9,7 @@ from aiogram.filters import Command
 from aiogram.types import FSInputFile
 from PIL import Image
 import zipfile
-from config import CONFIG, save_config
+from cfg import CONFIG, save_config
 from translator.pipeline import TranslationPipeline
 
 router = Router()
