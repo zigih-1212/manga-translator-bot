@@ -7,9 +7,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / "cfg" / ".env")
 load_dotenv(BASE_DIR / ".env")
 
-CONFIG_PATH = BASE_DIR / "cfg" / "config.json"
-GLOSSARY_PATH = BASE_DIR / "cfg" / "glossary.json"
-FONTS_PATH = BASE_DIR / "cfg" / "fonts.json"
+DATA_DIR = Path(os.getenv("DATA_DIR", "") or str(BASE_DIR / "cfg"))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+CONFIG_PATH = DATA_DIR / "config.json"
+GLOSSARY_PATH = DATA_DIR / "glossary.json"
+FONTS_PATH = DATA_DIR / "fonts.json"
 
 
 def _load_json(path: Path, default=None):

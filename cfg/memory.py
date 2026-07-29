@@ -1,8 +1,9 @@
 import json
 from pathlib import Path
 from collections import Counter
+from . import DATA_DIR
 
-MEMORY_PATH = Path(__file__).resolve().parent / "memory.json"
+MEMORY_PATH = DATA_DIR / "memory.json"
 
 
 def _load():
