@@ -14,20 +14,36 @@ image = (
         "opencv-python-headless>=4.9.0",
         "numpy>=1.24.0",
         "Pillow>=10.0.0",
-        "onnxruntime-gpu>=1.17.0",
+        "onnxruntime>=1.17.0",
     )
     .run_commands(
         "mkdir -p /models",
-        "python -c \"import urllib.request; urllib.request.urlretrieve('https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.onnx', '/models/lama.onnx')\"",
+        'pip install onnx',
     )
 )
 
 
-@app.function(gpu="any", image=image, timeout=600, container_idle_timeout=300)
+@app.function(gpu="any", image=image, timeout=600, scaledown_window=300)
 def inpaint_batch(images_b64: list[str], dilation: int = 5, radius: int = 10) -> list[str]:
+    import asyncio
     import onnxruntime
+    import aiohttp
+
+    async def _download_model():
+        model_path = Path("/models/lama.onnx")
+        if model_path.exists():
+            return
+        url = "https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.onnx"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=300)) as resp:
+                resp.raise_for_status()
+                data = await resp.read()
+                model_path.write_bytes(data)
+
+    asyncio.run(_download_model())
+
     sess = onnxruntime.InferenceSession(
-        "/models/lama.onnx", providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
+        "/models/lama.onnx", providers=["CPUExecutionProvider"]
     )
     results = []
     for img_b64 in images_b64:
