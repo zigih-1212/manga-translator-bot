@@ -25,7 +25,7 @@ def _load_json(path: Path, default=None):
         return default if default is not None else {}
 
 
-CONFIG = _load_json(CONFIG_PATH, {"chapters": {}, "chat_id": None})
+CONFIG = _load_json(CONFIG_PATH, {"chapters": {}, "chat_id": None, "titles": [], "telegram": {}})
 GLOSSARY = _load_json(GLOSSARY_PATH, {})
 FONTS = _load_json(FONTS_PATH, {})
 
