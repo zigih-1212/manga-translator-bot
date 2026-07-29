@@ -146,9 +146,14 @@ class MangaDexSource(BaseSource):
                 break
             for item in items:
                 attrs = item["attributes"]
+                ch_num = attrs.get("chapter", "")
+                try:
+                    float(ch_num)
+                except (ValueError, TypeError):
+                    continue
                 chapters.append(Chapter(
                     id=item["id"],
-                    number=attrs.get("chapter", ""),
+                    number=ch_num,
                     title=attrs.get("title", ""),
                     volume=attrs.get("volume"),
                     pages_count=attrs.get("pages", 0),
