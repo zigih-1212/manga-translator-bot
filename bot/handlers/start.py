@@ -1,19 +1,23 @@
 from aiogram import Router
 from aiogram.types import Message
 from aiogram.filters import CommandStart, Command
+from config import CONFIG, save_config
 
 router = Router()
 
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
+    CONFIG.setdefault("telegram", {})["chat_id"] = message.chat.id
+    save_config()
     await message.answer(
         "Manga Translator Bot\n\n"
         "/add_title — добавить тайтл (поиск на MangaDex)\n"
         "/list — список тайтлов\n"
         "/translate — перевод главы\n"
         "/status — активные задачи\n"
-        "/help — помощь"
+        "/help — помощь\n\n"
+        "Бот автоматически проверяет новые главы каждые 6ч."
     )
 
 

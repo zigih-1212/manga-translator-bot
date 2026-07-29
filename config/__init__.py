@@ -33,3 +33,8 @@ TG_PROXY_URL = os.getenv("TG_PROXY_URL", "")
 
 TEMP_DIR = BASE_DIR / "temp"
 TEMP_DIR.mkdir(exist_ok=True)
+
+
+def save_config():
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(CONFIG, f, ensure_ascii=False, indent=2)
