@@ -10,6 +10,7 @@ from sources.mangadex import MangaDexSource
 from translator.llm import LLMTranslator
 from translator.renderer import TextRenderer
 from translator.colab_client import ColabClient
+from translator.inpainter import LaMaInpainter
 from config import TEMP_DIR
 
 
@@ -74,6 +75,7 @@ class TranslationPipeline:
         self.translator = LLMTranslator()
         self.renderer = TextRenderer()
         self.colab = ColabClient()
+        self.inpainter = LaMaInpainter()
         self.progress_callback = None
 
     def on_progress(self, callback):
@@ -257,7 +259,7 @@ class TranslationPipeline:
                         mask[y1:y2, x1:x2] = 255
                 kernel = np.ones((3, 3), np.uint8)
                 mask = cv2.dilate(mask, kernel, iterations=1)
-                clean_cv = cv2.inpaint(cv_img, mask, 5, cv2.INPAINT_NS)
+                clean_cv = self.inpainter.inpaint(cv_img, mask)
                 clean_img = Image.fromarray(cv2.cvtColor(clean_cv, cv2.COLOR_BGR2RGB))
                 del cv_img, mask, clean_cv
 
