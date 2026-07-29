@@ -25,7 +25,17 @@ def _load_json(path: Path, default=None):
         return default if default is not None else {}
 
 
-CONFIG = _load_json(CONFIG_PATH, {"chapters": {}, "chat_id": None, "titles": [], "telegram": {}})
+DEFAULT_CONFIG = {
+    "webfandom": {"base_url": "https://webfandom.ru", "team_name": ""},
+    "mangadex": {"base_url": "https://api.mangadex.org", "image_url": "https://uploads.mangadex.org"},
+    "llm": {"provider": "colab", "model": "google/gemini-2.0-flash-lite", "fallback_provider": "deep-translator", "max_context_tokens": 32000, "temperature": 0.3},
+    "fonts": {"dialogue": "fonts/anime/Anime Font.ttf", "sfx": "fonts/bring_me_a_helicopter/Bring Me A Helicopter!.otf", "narration": "fonts/wister_lilya/Wister Lilya.otf"},
+    "translation": {"sfx_mode": "english_reference", "auto_publish": False, "max_pages_per_batch": 20},
+    "titles": [],
+    "telegram": {},
+    "chapters": {},
+}
+CONFIG = _load_json(CONFIG_PATH, DEFAULT_CONFIG)
 GLOSSARY = _load_json(GLOSSARY_PATH, {})
 FONTS = _load_json(FONTS_PATH, {})
 
