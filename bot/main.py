@@ -181,6 +181,51 @@ async def scheduler_loop(bot: Bot):
             logger.exception(f"auto: ошибка: {e}")
 
 
+async def startup_translate(bot: Bot):
+    chapter = os.environ.get("STARTUP_TRANSLATE_CHAPTER")
+    if not chapter:
+        return
+    logger.info(f"startup: перевожу главу {chapter}...")
+    titles = CONFIG.get("titles", [])
+    chat_id = CONFIG.get("telegram", {}).get("chat_id")
+    if not titles or not chat_id:
+        logger.warning("startup: нет тайтлов или chat_id")
+        return
+    title = titles[0]
+    try:
+        pipeline = TranslationPipeline()
+        page_paths = await pipeline.process_chapter(
+            mangadex_manga_id=title["mangadex_id"],
+            chapter_number=chapter,
+            source_lang=title.get("source_lang", "ko"),
+            target_lang="en",
+        )
+        await pipeline.close()
+        if not page_paths:
+            await bot.send_message(chat_id, f"❌ Стартовый перевод гл. {chapter}: не удалось")
+            return
+        zip_path = Path("temp") / f"startup_{chapter}.zip"
+        zip_path.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for p in page_paths:
+                zf.write(p, arcname=Path(p).name)
+        await bot.send_document(
+            chat_id, document=FSInputFile(str(zip_path)),
+            caption=f"{title['name']} — глава {chapter}"
+        )
+        zip_path.unlink(missing_ok=True)
+        title["last_chapter"] = chapter
+        title["chapters_count"] = max(title.get("chapters_count", 0), int(float(chapter)))
+        save_config()
+        await bot.send_message(chat_id, f"✅ Глава {chapter}: готово!")
+    except Exception as e:
+        logger.exception(f"startup: ошибка: {e}")
+        try:
+            await bot.send_message(chat_id, f"❌ Стартовый перевод гл. {chapter}: {e}")
+        except:
+            pass
+
+
 async def main():
     bot = Bot(token=TG_BOT_TOKEN, session=build_session(), default=DefaultBotProperties(parse_mode=None))
     dp = Dispatcher()
@@ -193,6 +238,7 @@ async def main():
     logger.info("Bot starting...")
     asyncio.create_task(_keepalive())
     asyncio.create_task(scheduler_loop(bot))
+    asyncio.create_task(startup_translate(bot))
     await dp.start_polling(bot)
 
 

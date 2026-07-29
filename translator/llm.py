@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import httpx
-from config import GLOSSARY, CONFIG, COLAB_URL, OPENROUTER_API_KEY, GROQ_API_KEY
+from config import GLOSSARY, CONFIG, COLAB_URL, OPENROUTER_API_KEY, GROQ_API_KEY, GEMINI_API_KEY
 
 def _get_proxy():
     return (
@@ -113,12 +113,14 @@ class LLMTranslator:
             print("[LLM] Colab unreachable, skipping")
 
     def _init_providers(self):
+        if GEMINI_API_KEY:
+            self._providers.append(("Gemini 2.0 Flash", self._call_gemini))
         if self.colab_available:
             self._providers.append(("Colab Server", self._call_colab))
-        if OPENROUTER_API_KEY:
-            self._providers.append(("OpenRouter Free", self._call_openrouter_free))
         if GROQ_API_KEY:
             self._providers.append(("Groq (Llama 70B)", self._call_groq))
+        if OPENROUTER_API_KEY:
+            self._providers.append(("OpenRouter Free", self._call_openrouter_free))
         if OPENROUTER_API_KEY:
             self._providers.append(("OpenRouter Paid", self._call_openrouter_paid))
         self._providers.append(("deep-translator", self._call_fallback))
@@ -210,6 +212,45 @@ class LLMTranslator:
             resp.raise_for_status()
             data = resp.json()
             content = data["choices"][0]["message"]["content"]
+            result = _parse_json_response(content)
+            if result and len(result) == len(korean_texts):
+                return result
+            return None
+
+    async def _call_gemini(self, korean_texts, english_texts, page_number) -> list[dict] | None:
+        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict())
+        payload = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": prompt}],
+                }
+            ],
+            "systemInstruction": {
+                "parts": [{"text": SYSTEM_PROMPT}],
+            },
+            "generationConfig": {
+                "temperature": self.temperature,
+                "maxOutputTokens": 4096,
+            },
+        }
+        async with _make_client(60.0) as client:
+            resp = await client.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}",
+                headers={"Content-Type": "application/json"},
+                json=payload,
+            )
+            if resp.status_code == 429:
+                return None
+            if resp.status_code == 403:
+                print("  [LLM] Gemini → 403 (quota/blocked), skipping")
+                return None
+            resp.raise_for_status()
+            data = resp.json()
+            candidates = data.get("candidates", [])
+            if not candidates:
+                return None
+            content = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
             result = _parse_json_response(content)
             if result and len(result) == len(korean_texts):
                 return result
