@@ -11,14 +11,20 @@ CONFIG_PATH = BASE_DIR / "config" / "config.json"
 GLOSSARY_PATH = BASE_DIR / "config" / "glossary.json"
 FONTS_PATH = BASE_DIR / "config" / "fonts.json"
 
-with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-    CONFIG = json.load(f)
 
-with open(GLOSSARY_PATH, "r", encoding="utf-8") as f:
-    GLOSSARY = json.load(f)
+def _load_json(path: Path, default=None):
+    if not path.exists():
+        return default if default is not None else {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default if default is not None else {}
 
-with open(FONTS_PATH, "r", encoding="utf-8") as f:
-    FONTS = json.load(f)
+
+CONFIG = _load_json(CONFIG_PATH, {"chapters": {}, "chat_id": None})
+GLOSSARY = _load_json(GLOSSARY_PATH, {})
+FONTS = _load_json(FONTS_PATH, {})
 
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
 TG_API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -36,5 +42,6 @@ TEMP_DIR.mkdir(exist_ok=True)
 
 
 def save_config():
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(CONFIG, f, ensure_ascii=False, indent=2)
