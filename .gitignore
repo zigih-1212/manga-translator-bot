@@ -1,0 +1,9 @@
+.env
+config/.env
+*.pyc
+__pycache__/
+temp/
+bot/err.txt
+bot/log.txt
+test_pipeline.log
+*.log

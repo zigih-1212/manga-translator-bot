@@ -1,0 +1,32 @@
+{
+  "dialogue": {
+    "default": "fonts/anime/Anime Font.ttf",
+    "alternatives": [
+      "fonts/anime_2/Anime.otf",
+      "fonts/modern_cosmo/Modern Cosmo.ttf",
+      "fonts/creator_genius/Creator Genius.ttf",
+      "fonts/bigbelow/Bigbelow.otf"
+    ],
+    "style_map": {
+      "sans-serif": "fonts/anime/Anime Font.ttf",
+      "handwritten": "fonts/colinoosh/colinoosh.otf",
+      "serif": "fonts/classic_market/Classic Market.otf"
+    }
+  },
+  "sfx": {
+    "default": "fonts/bring_me_a_helicopter/Bring Me A Helicopter!.otf",
+    "alternatives": [
+      "fonts/world_championship/WorldChampionship_PERSONAL_USE_ONLY-Regular.otf",
+      "fonts/bauhaus_olga_1933/Bauhaus Olga 1933-Bold.ttf",
+      "fonts/chinese_karaoke/ChineseKaraoke.ttf"
+    ]
+  },
+  "narration": {
+    "default": "fonts/wister_lilya/Wister Lilya.otf",
+    "alternatives": [
+      "fonts/chinese_brush/ChineseBrush.ttf",
+      "fonts/miracle_history/Miracle History.ttf",
+      "fonts/mitshuka/Mitshuka_PERSONAL_USE_ONLY.otf"
+    ]
+  }
+}

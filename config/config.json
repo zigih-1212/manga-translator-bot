@@ -1,0 +1,37 @@
+{
+  "webfandom": {
+    "base_url": "https://webfandom.ru",
+    "team_name": ""
+  },
+  "mangadex": {
+    "base_url": "https://api.mangadex.org",
+    "image_url": "https://uploads.mangadex.org"
+  },
+  "llm": {
+    "provider": "colab",
+    "model": "google/gemini-3.5-flash-lite",
+    "fallback_provider": "deep-translator",
+    "max_context_tokens": 32000,
+    "temperature": 0.3
+  },
+  "fonts": {
+    "dialogue": "fonts/anime/Anime Font.ttf",
+    "sfx": "fonts/bring_me_a_helicopter/Bring Me A Helicopter!.otf",
+    "narration": "fonts/wister_lilya/Wister Lilya.otf"
+  },
+  "translation": {
+    "sfx_mode": "english_reference",
+    "auto_publish": false,
+    "max_pages_per_batch": 20
+  },
+  "titles": [
+    {
+      "name": "MangaDex:3a187b0b",
+      "mangadex_id": "3a187b0b-472b-4f1a-9b04-c833c02ded49",
+      "source_lang": "ko",
+      "chapters_count": 3,
+      "first_chapter": "1",
+      "last_chapter": "3"
+    }
+  ]
+}
