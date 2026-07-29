@@ -46,6 +46,43 @@ def _filter_text_regions(ocr_texts: list[dict], img_w: int, img_h: int) -> list[
     return filtered
 
 
+CREDIT_KEYWORDS = [
+    "contents", "copyright", "all rights reserved", "author", "artist",
+    "illustrator", "story by", "art by", "special thanks", "first published",
+    "editor", "designer", "translation", "production", "originally published",
+    "no part of", "permission", "license", "printed in",
+    "содержание", "автор", "художник", "издательство", "тираж",
+]
+
+
+def _is_credit_page(ocr_texts: list[dict], img_w: int, img_h: int) -> bool:
+    if not ocr_texts:
+        return False
+    all_text = " ".join(r.get("text", "") for r in ocr_texts).lower()
+    for kw in CREDIT_KEYWORDS:
+        if kw in all_text:
+            return True
+    total_area = 0
+    for r in ocr_texts:
+        bb = r.get("bbox", [])
+        if not bb:
+            continue
+        if isinstance(bb[0], (list, tuple)):
+            xs = [int(p[0]) for p in bb]
+            ys = [int(p[1]) for p in bb]
+            bw = max(xs) - min(xs)
+            bh = max(ys) - min(ys)
+        else:
+            bw = bb[2] - bb[0]
+            bh = bb[3] - bb[1]
+        total_area += bw * bh
+    if total_area > 0.15 * img_w * img_h:
+        return True
+    if len(ocr_texts) > 20:
+        return True
+    return False
+
+
 def _group_texts_by_bubble(ocr_texts: list[dict], y_gap: int = 30) -> list[list[dict]]:
     sorted_items = sorted(ocr_texts, key=lambda r: (r.get("bbox", [{}])[0][1] if isinstance(r.get("bbox"), list) and r["bbox"] and isinstance(r["bbox"][0], (list, tuple)) else r.get("bbox", [0])[1], r.get("bbox", [{}])[0][0] if isinstance(r.get("bbox"), list) and r["bbox"] and isinstance(r["bbox"][0], (list, tuple)) else r.get("bbox", [0])[0]))
     groups = []
@@ -156,7 +193,7 @@ class TranslationPipeline:
             if self.colab.is_connected:
                 await self._report(f"OCR стр. {i + 1}/{total_pages}", progress, 100)
                 try:
-                    ocr_result = await self.colab.ocr_pages([src_data])
+                    ocr_result = await self.colab.ocr_pages([src_data], lang=source_lang)
                     ocr_texts = ocr_result[0] if ocr_result else []
                 except Exception as e:
                     await self._report(f"OCR недоступен: {e}", progress, 100)
@@ -166,6 +203,9 @@ class TranslationPipeline:
                     img_w, img_h = tmp_img.size
                     tmp_img.close()
                     ocr_texts = _filter_text_regions(ocr_texts, img_w, img_h)
+                    if ocr_texts and _is_credit_page(ocr_texts, img_w, img_h):
+                        await self._report(f"Credit-страница {i + 1}, пропускаю", progress, 100)
+                        ocr_texts = []
                 except Exception:
                     pass
             else:
@@ -177,7 +217,7 @@ class TranslationPipeline:
             if en_data and ocr_texts:
                 if self.colab.is_connected:
                     try:
-                        en_ocr = await self.colab.ocr_pages([en_data])
+                        en_ocr = await self.colab.ocr_pages([en_data], lang=target_lang)
                         en_texts = [r.get("text", "") for r in (en_ocr[0] if en_ocr else []) if r.get("text")]
                     except Exception:
                         pass
