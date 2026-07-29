@@ -181,7 +181,19 @@ class TextRenderer:
             else:
                 if current:
                     lines.append(current)
-                current = word
+                wb = font.getbbox(word)
+                if wb[2] - wb[0] > max_width:
+                    for ch in word:
+                        test2 = current + ch if current else ch
+                        b2 = font.getbbox(test2)
+                        if b2[2] - b2[0] <= max_width:
+                            current = test2
+                        else:
+                            if current:
+                                lines.append(current)
+                            current = ch
+                else:
+                    current = word
         if current:
             lines.append(current)
         return lines
@@ -201,9 +213,10 @@ class TextRenderer:
         x1, y1, x2, y2 = bbox
         bw = x2 - x1
         bh = y2 - y1
+        pad = 10
         font_path = self._get_font_path(font_type, text)
-        font = self._fit_text(draw, text, bw - 8, bh - 8, font_path)
-        lines = self._wrap_text(text, font, bw - 8)
+        font = self._fit_text(draw, text, bw - pad * 2, bh - pad * 2, font_path)
+        lines = self._wrap_text(text, font, bw - pad * 2)
         line_height = font.getbbox("Аg")[3] - font.getbbox("Аg")[1] + 2
         total_height = line_height * len(lines)
         start_y = y1 + (bh - total_height) // 2

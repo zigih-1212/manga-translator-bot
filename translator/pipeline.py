@@ -230,13 +230,14 @@ class TranslationPipeline:
                 cv_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
                 h, w = cv_img.shape[:2]
                 mask = np.zeros((h, w), dtype=np.uint8)
+                PAD = 5
                 for r in ocr_texts:
                     word_bboxes = r.get("word_bboxes", [])
                     if word_bboxes:
                         for wb in word_bboxes:
                             x1, y1, x2, y2 = [int(v) for v in wb]
-                            x1, y1 = max(0, x1 - 2), max(0, y1 - 2)
-                            x2, y2 = min(w, x2 + 2), min(h, y2 + 2)
+                            x1, y1 = max(0, x1 - PAD), max(0, y1 - PAD)
+                            x2, y2 = min(w, x2 + PAD), min(h, y2 + PAD)
                             mask[y1:y2, x1:x2] = 255
                     else:
                         bb = r.get("bbox", [])
@@ -245,14 +246,18 @@ class TranslationPipeline:
                         if isinstance(bb[0], (list, tuple)):
                             xs = [int(p[0]) for p in bb]
                             ys = [int(p[1]) for p in bb]
-                            x1, y1 = max(0, min(xs)), max(0, min(ys))
-                            x2, y2 = min(w, max(xs)), min(h, max(ys))
+                            x1, y1 = max(0, min(xs) - PAD), max(0, min(ys) - PAD)
+                            x2, y2 = min(w, max(xs) + PAD), min(h, max(ys) + PAD)
                         elif len(bb) >= 4:
                             x1, y1, x2, y2 = [int(v) for v in bb[:4]]
+                            x1, y1 = max(0, x1 - PAD), max(0, y1 - PAD)
+                            x2, y2 = min(w, x2 + PAD), min(h, y2 + PAD)
                         else:
                             continue
                         mask[y1:y2, x1:x2] = 255
-                clean_cv = cv2.inpaint(cv_img, mask, 3, cv2.INPAINT_TELEA)
+                kernel = np.ones((3, 3), np.uint8)
+                mask = cv2.dilate(mask, kernel, iterations=1)
+                clean_cv = cv2.inpaint(cv_img, mask, 5, cv2.INPAINT_NS)
                 clean_img = Image.fromarray(cv2.cvtColor(clean_cv, cv2.COLOR_BGR2RGB))
                 del cv_img, mask, clean_cv
 

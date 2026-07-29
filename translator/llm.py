@@ -20,15 +20,18 @@ def _make_client(timeout=60.0):
     return httpx.AsyncClient(timeout=timeout)
 
 
-SYSTEM_PROMPT = """You are a professional manga/manhwa translator. Translate Korean text to natural Russian.
+SYSTEM_PROMPT = """You are a professional manga/manhwa translator.
+
+Translate the numbered Korean texts to natural Russian. Each text is one speech bubble or SFX from a manga page.
 
 RULES:
-- Translate each text as a complete sentence or phrase, not word-by-word
-- Use natural, conversational Russian
-- Keep character speech patterns consistent throughout the chapter
-- For short exclamations (like "!", "??", "히익", "큭") — still provide a Russian equivalent, do not skip them
-- NEVER return empty string unless the text is truly undetectable/unreadable garbage
-- Russian text must use horizontal orientation (left-to-right)
+- Translate each bubble as a complete sentence or phrase
+- If a bubble has only 1-2 words, infer the meaning from context (previous bubbles, story so far) and expand naturally
+- Use natural conversational Russian with appropriate colloquialisms
+- Keep character speech patterns consistent
+- For sound effects (SFX) like "히익", "큭", "드륵" — give a Russian onomatopoeia equivalent
+- NEVER return empty string
+- Russian text must be horizontal (left-to-right)
 
 Respond with ONLY a valid JSON array:
 [{"id": 1, "ru": "translation"}, {"id": 2, "ru": "translation"}, ...]"""
@@ -52,8 +55,11 @@ def _build_prompt(korean_texts, english_texts, page_number, context, glossary):
     if english_texts:
         en_block = "\n".join(f"[{i+1}] {t}" for i, t in enumerate(english_texts))
         parts.append("ENGLISH REFERENCE (for context):\n" + en_block)
-    texts_block = "\n".join(f"{i+1}\t{t}" for i, t in enumerate(korean_texts))
-    parts.append("TEXTS TO TRANSLATE:\n" + texts_block)
+    texts_block = json.dumps(
+        [{f"bubble_{i+1}": t} for i, t in enumerate(korean_texts)],
+        ensure_ascii=False, indent=2,
+    )
+    parts.append("TEXTS TO TRANSLATE (speech bubbles on this page):\n" + texts_block)
     return "\n\n".join(parts)
 
 

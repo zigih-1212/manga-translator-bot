@@ -181,10 +181,11 @@ class MangaDexSource(BaseSource):
         data = await self._get_json(f"{self.BASE}/at-home/server/{chapter_id}")
         base_url = data.get("baseUrl", "")
         chapter_hash = data.get("chapter", {}).get("hash", "")
-        filenames = data.get("chapter", {}).get("dataSaver", [])
+        ch_data = data.get("chapter", {})
+        filenames = ch_data.get("data") or ch_data.get("dataSaver", [])
         pages = []
         for i, fname in enumerate(filenames):
-            url = f"{base_url}/data-saver/{chapter_hash}/{fname}"
+            url = f"{base_url}/data/{chapter_hash}/{fname}"
             pages.append(Page(url=url, index=i, width=0, height=0))
         return pages
 
