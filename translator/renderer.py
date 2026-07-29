@@ -151,8 +151,8 @@ class TextRenderer:
         max_width: int,
         max_height: int,
         font_path: str,
-        min_size: int = 8,
-        max_size: int = 28,
+        min_size: int = 10,
+        max_size: int = 36,
     ) -> ImageFont.FreeTypeFont:
         for size in range(max_size, min_size - 1, -1):
             try:

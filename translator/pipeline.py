@@ -11,6 +11,7 @@ from translator.llm import LLMTranslator
 from translator.renderer import TextRenderer
 from translator.colab_client import ColabClient
 from translator.inpainter import LaMaInpainter
+from translator.bubbles import get_bubble_bounds, build_mask
 from config import TEMP_DIR
 from config.memory import save_translations
 
@@ -203,7 +204,12 @@ class TranslationPipeline:
 
             await self._report(f"Обработка стр. {i + 1}/{total_pages}", progress, 100)
             try:
-                pairs = []
+                img = Image.open(io.BytesIO(src_data)).convert("RGB")
+                cv_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+                h, w = cv_img.shape[:2]
+
+                bubble_pairs = []
+                all_bubble_bboxes = []
                 for g_idx, group in enumerate(groups):
                     ru = translations[g_idx].get("ru", "").strip() if g_idx < len(translations) else ""
                     if not ru:
@@ -219,55 +225,30 @@ class TranslationPipeline:
                         else:
                             xs.extend([bb[0], bb[2]])
                             ys.extend([bb[1], bb[3]])
-                    if xs:
-                        combined_bbox = (min(xs), min(ys), max(xs), max(ys))
-                        pairs.append((combined_bbox, ru))
+                    if not xs:
+                        continue
+                    text_bbox = (min(xs), min(ys), max(xs), max(ys))
+                    bubble_bbox = get_bubble_bounds(cv_img, text_bbox, w, h)
+                    all_bubble_bboxes.append(bubble_bbox)
+                    bubble_pairs.append((bubble_bbox, ru))
 
-                if not pairs:
+                if not bubble_pairs:
                     out_path = work_dir / f"page_{i:03d}.png"
                     out_path.write_bytes(src_data)
                     translated_page_paths.append(str(out_path))
-                    del src_data, en_data
+                    del src_data, en_data, img, cv_img
                     gc.collect()
                     continue
 
-                img = Image.open(io.BytesIO(src_data)).convert("RGB")
-                cv_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-                h, w = cv_img.shape[:2]
-                mask = np.zeros((h, w), dtype=np.uint8)
-                PAD = 10
-                for r in ocr_texts:
-                    word_bboxes = r.get("word_bboxes", [])
-                    if word_bboxes:
-                        for wb in word_bboxes:
-                            x1, y1, x2, y2 = [int(v) for v in wb]
-                            x1, y1 = max(0, x1 - PAD), max(0, y1 - PAD)
-                            x2, y2 = min(w, x2 + PAD), min(h, y2 + PAD)
-                            mask[y1:y2, x1:x2] = 255
-                    else:
-                        bb = r.get("bbox", [])
-                        if not bb:
-                            continue
-                        if isinstance(bb[0], (list, tuple)):
-                            xs = [int(p[0]) for p in bb]
-                            ys = [int(p[1]) for p in bb]
-                            x1, y1 = max(0, min(xs) - PAD), max(0, min(ys) - PAD)
-                            x2, y2 = min(w, max(xs) + PAD), min(h, max(ys) + PAD)
-                        elif len(bb) >= 4:
-                            x1, y1, x2, y2 = [int(v) for v in bb[:4]]
-                            x1, y1 = max(0, x1 - PAD), max(0, y1 - PAD)
-                            x2, y2 = min(w, x2 + PAD), min(h, y2 + PAD)
-                        else:
-                            continue
-                        mask[y1:y2, x1:x2] = 255
+                mask = build_mask(h, w, all_bubble_bboxes)
                 clean_cv = self.inpainter.inpaint(cv_img, mask)
                 clean_img = Image.fromarray(cv2.cvtColor(clean_cv, cv2.COLOR_BGR2RGB))
                 del cv_img, mask, clean_cv
 
-                for bbox, text in pairs:
+                for bubble_bbox, text in bubble_pairs:
                     try:
                         clean_img = self.renderer.render_bubble_text(
-                            clean_img, bbox, text, font_type="dialogue"
+                            clean_img, bubble_bbox, text, font_type="dialogue"
                         )
                     except Exception:
                         continue
