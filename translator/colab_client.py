@@ -85,15 +85,16 @@ class ColabClient:
                 results = []
                 if result and result[0]:
                     for line in result[0]:
-                        bbox, (text, conf) = line
+                        poly, (text, conf) = line
                         text = text.strip()
                         if not text or conf < 0.3:
                             continue
-                        xs = [int(p[0]) for p in bbox]
-                        ys = [int(p[1]) for p in bbox]
+                        xs = [int(p[0]) for p in poly]
+                        ys = [int(p[1]) for p in poly]
                         l, t, r, b = min(xs), min(ys), max(xs), max(ys)
                         results.append({
                             "bbox": [[l, t], [r, t], [r, b], [l, b]],
+                            "polygon": [[int(p[0]), int(p[1])] for p in poly],
                             "text": text,
                             "word_bboxes": [[l, t, r, b]],
                             "confidence": conf,

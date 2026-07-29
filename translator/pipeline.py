@@ -210,6 +210,7 @@ class TranslationPipeline:
 
                 bubble_pairs = []
                 all_bubble_bboxes = []
+                is_bubble_flags = []
                 for g_idx, group in enumerate(groups):
                     ru = translations[g_idx].get("ru", "").strip() if g_idx < len(translations) else ""
                     if not ru:
@@ -228,9 +229,10 @@ class TranslationPipeline:
                     if not xs:
                         continue
                     text_bbox = (min(xs), min(ys), max(xs), max(ys))
-                    bubble_bbox = get_bubble_bounds(cv_img, text_bbox, w, h)
+                    bubble_bbox, is_bubble = get_bubble_bounds(cv_img, text_bbox, w, h)
                     all_bubble_bboxes.append(bubble_bbox)
-                    bubble_pairs.append((bubble_bbox, ru))
+                    bubble_pairs.append((bubble_bbox, ru, is_bubble))
+                    is_bubble_flags.append(is_bubble)
 
                 if not bubble_pairs:
                     out_path = work_dir / f"page_{i:03d}.png"
@@ -241,11 +243,18 @@ class TranslationPipeline:
                     continue
 
                 mask = build_mask(h, w, all_bubble_bboxes)
+
+                for r in ocr_texts:
+                    poly = r.get("polygon")
+                    if poly:
+                        pts = np.array([[(p[0], p[1]) for p in poly]], dtype=np.int32)
+                        cv2.fillPoly(mask, pts, 255)
+
                 clean_cv = self.inpainter.inpaint(cv_img, mask)
                 clean_img = Image.fromarray(cv2.cvtColor(clean_cv, cv2.COLOR_BGR2RGB))
                 del cv_img, mask, clean_cv
 
-                for bubble_bbox, text in bubble_pairs:
+                for bubble_bbox, text, is_bubble in bubble_pairs:
                     try:
                         clean_img = self.renderer.render_bubble_text(
                             clean_img, bubble_bbox, text, font_type="dialogue"

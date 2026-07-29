@@ -66,8 +66,8 @@ def expand_bbox(bbox, img_w, img_h, factor=0.6):
 def get_bubble_bounds(img_bgr, text_bbox, img_w, img_h):
     bubble = _find_bubble_contour(img_bgr, text_bbox)
     if bubble:
-        return bubble
-    return expand_bbox(text_bbox, img_w, img_h)
+        return bubble, True
+    return expand_bbox(text_bbox, img_w, img_h), False
 
 
 def build_mask(img_h, img_w, all_bubble_bboxes, pad=10):
