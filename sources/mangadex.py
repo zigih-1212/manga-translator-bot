@@ -131,7 +131,10 @@ class MangaDexSource(BaseSource):
                     "order[chapter]": "asc",
                     "includes[]": "scanlation_group",
                 })
-            for item in data.get("data", []):
+            items = data.get("data", [])
+            if not items:
+                break
+            for item in items:
                 attrs = item["attributes"]
                 chapters.append(Chapter(
                     id=item["id"],
@@ -141,9 +144,8 @@ class MangaDexSource(BaseSource):
                     pages_count=attrs.get("pages", 0),
                     translated_language=attrs.get("translatedLanguage", lang),
                 ))
-            total = data.get("total", 0)
             offset += limit
-            if offset >= total:
+            if len(items) < limit:
                 break
         return chapters
 

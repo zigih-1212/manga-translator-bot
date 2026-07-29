@@ -15,27 +15,49 @@ OCR_SPACE_API = "https://api.ocr.space/parse/image"
 OCR_SPACE_KEY = "helloworld"
 
 
+PADDLE_LANG_MAP = {
+    "ko": "korean",
+    "kor": "korean",
+    "en": "english",
+    "eng": "english",
+    "ja": "japanese",
+    "jpn": "japanese",
+    "ru": "russian",
+    "rus": "russian",
+}
+
+
 class ColabClient:
     def __init__(self, base_url: str = ""):
         proxy = _get_proxy()
         self.client = httpx.AsyncClient(timeout=120.0, proxy=proxy, verify=False) if proxy else httpx.AsyncClient(timeout=120.0)
         self._connected = True
-        self._paddle = None
+        self._paddle_instances: dict[str, any] = {}
         self._paddle_available = False
 
     async def init(self):
         try:
             loop = asyncio.get_event_loop()
-            self._paddle = await loop.run_in_executor(None, self._init_paddle)
+            self._paddle_instances["korean"] = await loop.run_in_executor(None, self._init_paddle, "korean")
             self._paddle_available = True
             print("[OCR] PaddleOCR (korean) on CPU")
         except Exception as e:
             print(f"[OCR] PaddleOCR not available: {e}, fallback to ocr.space")
 
     @staticmethod
-    def _init_paddle():
+    def _init_paddle(lang: str):
         from paddleocr import PaddleOCR
-        return PaddleOCR(lang="korean", use_angle_cls=False, use_gpu=False, show_log=False)
+        return PaddleOCR(lang=lang, use_angle_cls=False, use_gpu=False, show_log=False)
+
+    def _get_paddle(self, lang: str):
+        if lang not in self._paddle_instances:
+            try:
+                self._paddle_instances[lang] = self._init_paddle(lang)
+                print(f"[OCR] PaddleOCR ({lang}) initialized")
+            except Exception as e:
+                print(f"[OCR] PaddleOCR ({lang}) failed: {e}")
+                return self._paddle_instances.get("korean")
+        return self._paddle_instances[lang]
 
     @property
     def is_connected(self) -> bool:
@@ -43,10 +65,14 @@ class ColabClient:
 
     async def ocr_pages(self, pages: list[bytes], lang: str = "kor") -> list[list[dict]]:
         if self._paddle_available:
-            return await self._ocr_paddle(pages)
+            paddle_lang = PADDLE_LANG_MAP.get(lang, "korean")
+            return await self._ocr_paddle(pages, paddle_lang)
         return await self._ocr_space(pages, lang)
 
-    async def _ocr_paddle(self, pages: list[bytes]) -> list[list[dict]]:
+    async def _ocr_paddle(self, pages: list[bytes], lang: str = "korean") -> list[list[dict]]:
+        paddle = self._get_paddle(lang)
+        if not paddle:
+            return await self._ocr_space(pages, "kor" if lang == "korean" else "eng")
         all_results = []
         loop = asyncio.get_event_loop()
         for page_data in pages:
@@ -54,7 +80,7 @@ class ColabClient:
                 img = Image.open(io.BytesIO(page_data)).convert("RGB")
                 img_np = np.array(img)
                 result = await loop.run_in_executor(
-                    None, lambda: self._paddle.ocr(img_np, cls=False)
+                    None, lambda: paddle.ocr(img_np, cls=False)
                 )
                 results = []
                 if result and result[0]:

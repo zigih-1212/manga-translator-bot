@@ -33,12 +33,13 @@ async def process_search(message: Message, state: FSMContext):
         await message.answer("Ничего не найдено. Попробуй другое название:")
         return
 
+    await state.update_data(search_results=[{"id": r.id, "title": r.title} for r in results[:5]])
     buttons = []
-    for r in results[:5]:
+    for i, r in enumerate(results[:5]):
         text = f"{r.title}"
         if r.status:
             text += f" [{r.status}]"
-        buttons.append([InlineKeyboardButton(text=text, callback_data=f"add:{r.id}")])
+        buttons.append([InlineKeyboardButton(text=text, callback_data=f"add:{i}")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer("Выбери тайтл:", reply_markup=kb)
     await state.set_state(AddTitleStates.choosing_result)
@@ -46,7 +47,17 @@ async def process_search(message: Message, state: FSMContext):
 
 @router.callback_query(lambda c: c.data.startswith("add:"))
 async def select_title(callback: CallbackQuery, state: FSMContext):
-    manga_id = callback.data.split(":", 1)[1]
+    idx = int(callback.data.split(":", 1)[1])
+    data = await state.get_data()
+    results = data.get("search_results", [])
+    if idx >= len(results):
+        await callback.message.answer("Ошибка: результат не найден")
+        await callback.answer()
+        await state.clear()
+        return
+    manga_id = results[idx]["id"]
+    title_name = results[idx]["title"]
+    await state.update_data(manga_name=title_name)
     await callback.answer()
 
     await callback.message.answer("Проверяю доступные языки...")
@@ -80,7 +91,7 @@ async def select_source_lang(callback: CallbackQuery, state: FSMContext):
 
     data = await state.get_data()
     manga_id = data["manga_id"]
-
+    title_name = data.get("manga_name", f"MangaDex:{manga_id[:8]}")
     await callback.message.answer(f"Ищу главы на языке «{source_lang}»...")
     chapters = await mangadex.get_chapters(manga_id, source_lang)
 
@@ -90,7 +101,7 @@ async def select_source_lang(callback: CallbackQuery, state: FSMContext):
         return
 
     title_entry = {
-        "name": f"MangaDex:{manga_id[:8]}",
+        "name": title_name,
         "mangadex_id": manga_id,
         "source_lang": source_lang,
         "chapters_count": len(chapters),

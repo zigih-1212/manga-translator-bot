@@ -235,7 +235,7 @@ class TranslationPipeline:
                 cv_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
                 h, w = cv_img.shape[:2]
                 mask = np.zeros((h, w), dtype=np.uint8)
-                PAD = 5
+                PAD = 10
                 for r in ocr_texts:
                     word_bboxes = r.get("word_bboxes", [])
                     if word_bboxes:
@@ -260,8 +260,6 @@ class TranslationPipeline:
                         else:
                             continue
                         mask[y1:y2, x1:x2] = 255
-                kernel = np.ones((3, 3), np.uint8)
-                mask = cv2.dilate(mask, kernel, iterations=1)
                 clean_cv = self.inpainter.inpaint(cv_img, mask)
                 clean_img = Image.fromarray(cv2.cvtColor(clean_cv, cv2.COLOR_BGR2RGB))
                 del cv_img, mask, clean_cv

@@ -159,10 +159,22 @@ class TextRenderer:
                 font = ImageFont.truetype(font_path, size)
             except Exception:
                 font = ImageFont.load_default()
-            bbox = draw.textbbox((0, 0), text, font=font)
-            w = bbox[2] - bbox[0]
-            h = bbox[3] - bbox[1]
-            if w <= max_width and h <= max_height:
+            words = text.split()
+            lines = []
+            cur = ""
+            for w in words:
+                test = f"{cur} {w}".strip()
+                if font.getbbox(test)[2] - font.getbbox(test)[0] <= max_width:
+                    cur = test
+                else:
+                    if cur:
+                        lines.append(cur)
+                    cur = w
+            if cur:
+                lines.append(cur)
+            lh = font.getbbox("Аg")[3] - font.getbbox("Аg")[1] + 2
+            total_h = lh * len(lines)
+            if total_h <= max_height:
                 return font
         try:
             return ImageFont.truetype(font_path, min_size)
