@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 import httpx
-import img2pdf
+import zipfile
 from aiohttp import ClientSession
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -121,18 +121,19 @@ async def check_new_chapters(bot: Bot):
                         )
                         continue
 
-                    pdf_path = Path("temp") / f"auto_{manga_id[:8]}_{ch_str}.pdf"
-                    pdf_path.parent.mkdir(parents=True, exist_ok=True)
-                    with open(pdf_path, "wb") as f:
-                        f.write(img2pdf.convert(page_paths))
+                    zip_path = Path("temp") / f"auto_{manga_id[:8]}_{ch_str}.zip"
+                    zip_path.parent.mkdir(parents=True, exist_ok=True)
+                    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                        for p in page_paths:
+                            zf.write(p, arcname=Path(p).name)
 
                     await bot.send_document(
                         chat_id,
-                        document=FSInputFile(str(pdf_path)),
+                        document=FSInputFile(str(zip_path)),
                         caption=f"{title['name']} — глава {ch_str}",
                     )
 
-                    pdf_path.unlink(missing_ok=True)
+                    zip_path.unlink(missing_ok=True)
 
                     title["last_chapter"] = ch_str
                     title["chapters_count"] = max(

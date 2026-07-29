@@ -8,8 +8,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.filters import Command
 from aiogram.types import FSInputFile
 from PIL import Image
-import img2pdf
-from config import CONFIG
+import zipfile
+from config import CONFIG, save_config
 from translator.pipeline import TranslationPipeline
 
 router = Router()
@@ -128,31 +128,33 @@ async def start_translate(callback: CallbackQuery, state: FSMContext):
                 return
 
             await progress_msg.edit_text(
-                f"Собираю PDF ({len(page_paths)} стр.)..."
+                f"Собираю ZIP ({len(page_paths)} стр.)..."
             )
 
-            pdf_path = Path("temp") / f"chapter_{chapter_number}.pdf"
-            pdf_path.parent.mkdir(parents=True, exist_ok=True)
+            zip_path = Path("temp") / f"chapter_{chapter_number}.zip"
+            zip_path.parent.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for p in page_paths:
+                    zf.write(p, arcname=Path(p).name)
 
-            with open(pdf_path, "wb") as f:
-                f.write(img2pdf.convert(page_paths))
-
-            total_pages_pdf = len(page_paths)
+            total_pages = len(page_paths)
 
             await callback.message.answer_document(
-                document=FSInputFile(str(pdf_path)),
+                document=FSInputFile(str(zip_path)),
                 caption=(
                     f"{title['name']} — глава {chapter_number}\n"
-                    f"Страниц: {total_pages_pdf}\n"
+                    f"Страниц: {total_pages}\n"
                     f"Язык: {source_lang} -> ru"
                 ),
             )
+
+            zip_path.unlink(missing_ok=True)
 
             await progress_msg.edit_text(
                 f"Готово!\n"
                 f"Тайтл: {title['name']}\n"
                 f"Глава: {chapter_number}\n"
-                f"Страниц: {total_pages_pdf}"
+                f"Страниц: {total_pages}"
             )
 
         except Exception as e:
