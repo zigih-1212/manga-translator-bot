@@ -78,7 +78,10 @@ class ColabClient:
         for page_data in pages:
             try:
                 img = Image.open(io.BytesIO(page_data)).convert("RGB")
-                img_np = np.array(img)
+                ow, oh = img.size
+                scale = 2
+                img_big = img.resize((ow * scale, oh * scale), Image.LANCZOS)
+                img_np = np.array(img_big)
                 result = await loop.run_in_executor(
                     None, lambda: paddle.ocr(img_np, cls=False)
                 )
@@ -89,6 +92,7 @@ class ColabClient:
                         text = text.strip()
                         if not text or conf < 0.3:
                             continue
+                        poly = [[p[0] / scale, p[1] / scale] for p in poly]
                         xs = [int(p[0]) for p in poly]
                         ys = [int(p[1]) for p in poly]
                         l, t, r, b = min(xs), min(ys), max(xs), max(ys)

@@ -8,7 +8,9 @@ import cv2
 MODEL_DIR = Path(__file__).resolve().parent.parent / "models"
 MODEL_URLS = [
     "https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.onnx",
-    "https://huggingface.co/botp/big-lama/resolve/main/lama.onnx",
+    "https://huggingface.co/botp/big-lama/resolve/main/big-lama.onnx",
+    "https://huggingface.co/ChrisYang0307/big-lama/resolve/main/big-lama.onnx",
+    "https://huggingface.co/datasets/Sanster/LaMa-onnx/resolve/main/big-lama.onnx",
 ]
 MODEL_PATH = MODEL_DIR / "lama.onnx"
 
@@ -27,7 +29,10 @@ class LaMaInpainter:
         for url in MODEL_URLS:
             try:
                 print(f"[LaMa] Downloading {url}...")
-                urllib.request.urlretrieve(url, MODEL_PATH)
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=300) as src:
+                    with open(MODEL_PATH, "wb") as dst:
+                        dst.write(src.read())
                 print("[LaMa] Downloaded OK")
                 self._load_model()
                 return

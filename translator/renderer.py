@@ -210,21 +210,37 @@ class TextRenderer:
             lines.append(current)
         return lines
 
+    @staticmethod
+    def _estimate_brightness(img: Image.Image, bbox: tuple) -> float:
+        x1, y1, x2, y2 = bbox
+        region = img.crop((x1, y1, x2, y2))
+        gray = region.convert("L")
+        pixels = list(gray.getdata())
+        return sum(pixels) / len(pixels) if pixels else 255
+
     def render_bubble_text(
         self,
         img: Image.Image,
         bbox: tuple[int, int, int, int],
         text: str,
         font_type: str = "dialogue",
-        font_color: str = "white",
-        outline_color: str = "black",
         outline_width: int = 2,
+        is_bubble: bool = True,
     ) -> Image.Image:
         img = img.copy()
         draw = ImageDraw.Draw(img)
         x1, y1, x2, y2 = bbox
         bw = x2 - x1
         bh = y2 - y1
+        brightness = self._estimate_brightness(img, bbox)
+        if brightness < 128:
+            font_color, outline_color = "white", "black"
+        else:
+            font_color, outline_color = "black", "white"
+        if not is_bubble:
+            white_bg = Image.new("RGB", (bw, bh), (255, 255, 255))
+            img.paste(white_bg, (x1, y1))
+            draw = ImageDraw.Draw(img)
         pad = 10
         font_path = self._get_font_path(font_type, text)
         font = self._fit_text(draw, text, bw - pad * 2, bh - pad * 2, font_path)

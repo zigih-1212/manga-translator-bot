@@ -83,29 +83,49 @@ def _is_credit_page(ocr_texts: list[dict], img_w: int, img_h: int) -> bool:
     return False
 
 
+def _get_bbox_y(r):
+    bb = r.get("bbox", [])
+    if not bb:
+        return 0
+    if isinstance(bb[0], (list, tuple)):
+        return int(min(p[1] for p in bb))
+    return int(bb[1])
+
+
+def _get_bbox_x(r):
+    bb = r.get("bbox", [])
+    if not bb:
+        return 0
+    if isinstance(bb[0], (list, tuple)):
+        xs = [int(p[0]) for p in bb]
+        return (min(xs) + max(xs)) // 2
+    return (bb[0] + bb[2]) // 2
+
+
 def _group_texts_by_bubble(ocr_texts: list[dict], y_gap: int = 30) -> list[list[dict]]:
-    sorted_items = sorted(ocr_texts, key=lambda r: (r.get("bbox", [{}])[0][1] if isinstance(r.get("bbox"), list) and r["bbox"] and isinstance(r["bbox"][0], (list, tuple)) else r.get("bbox", [0])[1], r.get("bbox", [{}])[0][0] if isinstance(r.get("bbox"), list) and r["bbox"] and isinstance(r["bbox"][0], (list, tuple)) else r.get("bbox", [0])[0]))
-    groups = []
+    sorted_y = sorted(ocr_texts, key=_get_bbox_y)
+    rows = []
     current = []
     prev_bottom = None
-    for r in sorted_items:
-        bb = r.get("bbox", [])
-        if not bb:
-            continue
-        if isinstance(bb[0], (list, tuple)):
-            top, bottom = int(min(p[1] for p in bb)), int(max(p[1] for p in bb))
-        else:
-            top, bottom = int(bb[1]), int(bb[3])
+    for r in sorted_y:
+        top = _get_bbox_y(r)
         if prev_bottom is not None and top - prev_bottom > y_gap:
             if current:
-                groups.append(current)
+                rows.append(sorted(current, key=_get_bbox_x, reverse=True))
             current = [r]
         else:
             current.append(r)
-        prev_bottom = bottom
+        bottom_vals = []
+        for item in current:
+            bb = item.get("bbox", [])
+            if isinstance(bb[0], (list, tuple)):
+                bottom_vals.append(int(max(p[1] for p in bb)))
+            else:
+                bottom_vals.append(int(bb[3]))
+        prev_bottom = max(bottom_vals) if bottom_vals else None
     if current:
-        groups.append(current)
-    return groups
+        rows.append(sorted(current, key=_get_bbox_x, reverse=True))
+    return rows
 
 
 class TranslationPipeline:
@@ -297,7 +317,7 @@ class TranslationPipeline:
                 for bubble_bbox, text, is_bubble in bubble_pairs:
                     try:
                         clean_img = self.renderer.render_bubble_text(
-                            clean_img, bubble_bbox, text, font_type="dialogue"
+                            clean_img, bubble_bbox, text, font_type="dialogue", is_bubble=is_bubble
                         )
                     except Exception:
                         continue
