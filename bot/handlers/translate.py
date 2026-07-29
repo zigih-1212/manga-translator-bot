@@ -154,8 +154,6 @@ async def start_translate(callback: CallbackQuery, state: FSMContext):
                 f"Глава: {chapter_number}\n"
                 f"Страниц: {total_pages_pdf}"
             )
-            else:
-                await progress_msg.edit_text("PDF пустой.")
 
         except Exception as e:
             await progress_msg.edit_text(f"Ошибка: {e}")
