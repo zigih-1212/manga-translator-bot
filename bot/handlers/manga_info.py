@@ -23,7 +23,11 @@ async def cmd_manga(message: Message, state: FSMContext):
         await message.answer("Напиши название после /manga, например:\n/manga One Piece")
         return
     await message.answer(f"Ищу «{query}»...")
-    results = await mangadex.search(query)
+    try:
+        results = await mangadex.search(query)
+    except Exception as e:
+        await message.answer(f"Ошибка поиска: {e}. Попробуй позже.")
+        return
     if not results:
         await message.answer("Ничего не найдено. Попробуй другое название.")
         return

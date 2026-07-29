@@ -1,3 +1,4 @@
+import asyncio
 import aiohttp
 import httpx
 import os
@@ -18,17 +19,23 @@ def _httpx_client(**kwargs):
 
 class MangaDexSource(BaseSource):
     BASE = "https://api.mangadex.org"
-    MAX_RETRIES = 3
+    MAX_RETRIES = 5
+    _rate_limit_sem = asyncio.Semaphore(2)
+    _last_request_time = 0
+    _rate_lock = asyncio.Lock()
 
     def __init__(self):
-        self.session: aiohttp.ClientSession | None = None
+        self._own_session: aiohttp.ClientSession | None = None
         self.proxy_url = os.environ.get("COLAB_URL", "").rstrip("/")
         self._proxy = _get_proxy()
 
-    async def _get_session(self) -> aiohttp.ClientSession:
-        if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession()
-        return self.session
+    async def _rate_limit(self):
+        async with self._rate_lock:
+            now = asyncio.get_event_loop().time()
+            elapsed = now - self.__class__._last_request_time
+            if elapsed < 1.0:
+                await asyncio.sleep(1.0 - elapsed)
+            self.__class__._last_request_time = asyncio.get_event_loop().time()
 
     async def _get_json(self, url: str, params: dict | None = None) -> dict:
         if self.proxy_url:
@@ -39,21 +46,24 @@ class MangaDexSource(BaseSource):
                     return r.json()
             except Exception:
                 pass
-        session = await self._get_session()
-        for attempt in range(self.MAX_RETRIES):
-            try:
-                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                    if resp.status == 429:
-                        import asyncio
-                        await asyncio.sleep(2 ** attempt)
-                        continue
-                    resp.raise_for_status()
-                    return await resp.json()
-            except (aiohttp.ClientError, TimeoutError):
-                if attempt == self.MAX_RETRIES - 1:
-                    raise
-                import asyncio
-                await asyncio.sleep(1)
+        async with self._rate_limit_sem:
+            await self._rate_limit()
+            for attempt in range(self.MAX_RETRIES):
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                            if resp.status == 429:
+                                wait = 2 ** (attempt + 1)
+                                print(f"[MangaDex] 429, жду {wait}с...")
+                                await asyncio.sleep(wait)
+                                continue
+                            resp.raise_for_status()
+                            return await resp.json()
+                except (aiohttp.ClientError, TimeoutError, asyncio.TimeoutError) as e:
+                    print(f"[MangaDex] попытка {attempt+1}/{self.MAX_RETRIES} ошибка: {e}")
+                    if attempt == self.MAX_RETRIES - 1:
+                        raise
+                    await asyncio.sleep(2 ** attempt)
         return {}
 
     async def _proxy_get(self, path: str, params: dict | None = None) -> dict:
@@ -195,19 +205,23 @@ class MangaDexSource(BaseSource):
         img_data = await self._proxy_download(page.url)
         if img_data:
             return img_data
-        session = await self._get_session()
-        for attempt in range(self.MAX_RETRIES):
-            try:
-                async with session.get(page.url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
-                    resp.raise_for_status()
-                    return await resp.read()
-            except (aiohttp.ClientError, TimeoutError):
-                if attempt == self.MAX_RETRIES - 1:
-                    raise
-                import asyncio
-                await asyncio.sleep(1)
+        async with self._rate_limit_sem:
+            await self._rate_limit()
+            for attempt in range(self.MAX_RETRIES):
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(page.url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
+                            if resp.status == 429:
+                                await asyncio.sleep(2 ** (attempt + 1))
+                                continue
+                            resp.raise_for_status()
+                            return await resp.read()
+                except (aiohttp.ClientError, TimeoutError, asyncio.TimeoutError):
+                    if attempt == self.MAX_RETRIES - 1:
+                        raise
+                    await asyncio.sleep(1)
         return b""
 
     async def close(self):
-        if self.session and not self.session.closed:
-            await self.session.close()
+        if self._own_session and not self._own_session.closed:
+            await self._own_session.close()
