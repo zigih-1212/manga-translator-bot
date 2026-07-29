@@ -137,6 +137,7 @@ class TranslationPipeline:
         self.colab = ColabClient()
         self.inpainter = LaMaInpainter()
         self.progress_callback = None
+        self._bg_mask = None
 
     def on_progress(self, callback):
         self.progress_callback = callback
@@ -144,6 +145,36 @@ class TranslationPipeline:
     async def _report(self, message: str, current: int = 0, total: int = 0):
         if self.progress_callback:
             await self.progress_callback(message, current, total)
+
+    @staticmethod
+    def _fill_bubble_bg(cv_img: np.ndarray, bubble_bboxes: list[tuple], iterations: int = 2) -> np.ndarray:
+        filled = cv_img.copy()
+        bg_mask = np.zeros((cv_img.shape[0], cv_img.shape[1]), dtype=np.uint8)
+        for (x1, y1, x2, y2) in bubble_bboxes:
+            x1, y1, x2, y2 = max(x1, 0), max(y1, 0), min(x2, cv_img.shape[1]), min(y2, cv_img.shape[0])
+            if x2 - x1 < 10 or y2 - y1 < 10:
+                continue
+            border_pixels = []
+            for x in range(x1, x2, max(1, (x2 - x1) // 5)):
+                border_pixels.append((x, y1))
+                border_pixels.append((x, y2 - 1))
+            for y in range(y1, y2, max(1, (y2 - y1) // 5)):
+                border_pixels.append((x1, y))
+                border_pixels.append((x2 - 1, y))
+            if not border_pixels:
+                continue
+            colors = [filled[p[1], p[0]].tolist() for p in border_pixels]
+            avg_color = [int(sum(c) / len(c)) for c in zip(*colors)]
+            mask = np.zeros((cv_img.shape[0] + 2, cv_img.shape[1] + 2), dtype=np.uint8)
+            seed = (x1 + (x2 - x1) // 2, y1 + (y2 - y1) // 2)
+            lo = (10, 10, 10)
+            hi = (30, 30, 30)
+            try:
+                cv2.floodFill(filled, mask, seed, tuple(avg_color), lo, hi)
+                cv2.floodFill(bg_mask, mask, seed, 255, lo, hi)
+            except Exception:
+                pass
+        return filled, bg_mask
 
     async def process_chapter(
         self,
@@ -303,31 +334,35 @@ class TranslationPipeline:
                     gc.collect()
                     continue
 
-                mask = build_mask(h, w, all_bubble_bboxes)
+                filled_img, self._bg_mask = self._fill_bubble_bg(cv_img, all_bubble_bboxes)
 
+                mask = build_mask(h, w, all_bubble_bboxes)
                 for r in ocr_texts:
                     poly = r.get("polygon")
                     if poly:
                         pts = np.array([[(p[0], p[1]) for p in poly]], dtype=np.int32)
                         cv2.fillPoly(mask, pts, 255)
 
-                if MODAL_AVAILABLE:
-                    _, img_bytes = cv2.imencode(".png", cv_img)
-                    _, mask_bytes = cv2.imencode(".png", mask)
+                remaining = cv2.bitwise_and(mask, cv2.bitwise_not(self._bg_mask))
+
+                if cv2.countNonZero(remaining) == 0:
+                    clean_img = Image.fromarray(cv2.cvtColor(filled_img, cv2.COLOR_BGR2RGB))
+                elif MODAL_AVAILABLE:
+                    _, img_bytes = cv2.imencode(".png", filled_img)
                     modal_result = inpaint_batch_sync([img_bytes.tobytes()])
                     if modal_result:
                         modal_img = cv2.imdecode(np.frombuffer(modal_result[0], np.uint8), cv2.IMREAD_COLOR)
                         clean_img = Image.fromarray(cv2.cvtColor(modal_img, cv2.COLOR_BGR2RGB))
                         del modal_img
                     else:
-                        clean_cv = self.inpainter.inpaint(cv_img, mask)
-                        clean_img = Image.fromarray(cv2.cvtColor(clean_cv, cv2.COLOR_BGR2RGB))
-                        del clean_cv
+                        c = self.inpainter.inpaint(filled_img, remaining)
+                        clean_img = Image.fromarray(cv2.cvtColor(c, cv2.COLOR_BGR2RGB))
+                        del c
                 else:
-                    clean_cv = self.inpainter.inpaint(cv_img, mask)
-                    clean_img = Image.fromarray(cv2.cvtColor(clean_cv, cv2.COLOR_BGR2RGB))
-                    del clean_cv
-                del cv_img, mask
+                    c = self.inpainter.inpaint(filled_img, remaining)
+                    clean_img = Image.fromarray(cv2.cvtColor(c, cv2.COLOR_BGR2RGB))
+                    del c
+                del cv_img, mask, filled_img
 
                 for bubble_bbox, text, is_bubble in bubble_pairs:
                     try:
