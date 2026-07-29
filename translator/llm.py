@@ -3,6 +3,7 @@ import json
 import os
 import httpx
 from config import GLOSSARY, CONFIG, COLAB_URL, OPENROUTER_API_KEY, GROQ_API_KEY, GEMINI_API_KEY
+from config.memory import get_context as get_memory_context, get_glossary as get_memory_glossary
 
 def _get_proxy():
     return (
@@ -37,11 +38,18 @@ Respond with ONLY a valid JSON array:
 [{"id": 1, "ru": "translation"}, {"id": 2, "ru": "translation"}, ...]"""
 
 
-def _build_prompt(korean_texts, english_texts, page_number, context, glossary):
+def _build_prompt(korean_texts, english_texts, page_number, context, glossary, memory_context="", memory_glossary=None):
     parts = []
+    if memory_context:
+        parts.append("PREVIOUS CHAPTERS (translations of this manga from earlier chapters):\n" + memory_context)
     if context:
         parts.append("STORY SO FAR (Korean texts from previous pages for context):\n" + "\n".join(context[-5:]))
     parts.append(f"=== PAGE {page_number} ===")
+    if memory_glossary:
+        lines = ["Known terms (Korean -> Russian) from previous chapters:"]
+        for ko, ru in memory_glossary.items():
+            lines.append(f"  {ko} → {ru}")
+        parts.append("\n".join(lines))
     if glossary:
         chars = glossary.get("characters", {})
         terms = glossary.get("terms", {})
@@ -88,6 +96,8 @@ class LLMTranslator:
         self.colab_client = None
         self.model = CONFIG["llm"]["model"]
         self.temperature = CONFIG["llm"]["temperature"]
+        self._memory_context = ""
+        self._memory_glossary = {}
 
         if self.colab_url:
             self._test_colab()
@@ -146,7 +156,7 @@ class LLMTranslator:
         return glossary
 
     async def _call_openrouter(self, korean_texts, english_texts, page_number, model, timeout=120.0) -> list[dict] | None:
-        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict())
+        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary)
         payload = {
             "model": model,
             "messages": [
@@ -188,7 +198,7 @@ class LLMTranslator:
         return await self._call_openrouter(korean_texts, english_texts, page_number, self.model)
 
     async def _call_groq(self, korean_texts, english_texts, page_number) -> list[dict] | None:
-        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict())
+        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary)
         payload = {
             "model": "llama-3.3-70b-versatile",
             "messages": [
@@ -218,7 +228,7 @@ class LLMTranslator:
             return None
 
     async def _call_gemini(self, korean_texts, english_texts, page_number) -> list[dict] | None:
-        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict())
+        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary)
         payload = {
             "contents": [
                 {
@@ -292,9 +302,12 @@ class LLMTranslator:
                 results.append({"id": i + 1, "ru": text})
         return results
 
-    async def translate_page(self, korean_texts, english_texts=None, page_number=1) -> list[dict]:
+    async def translate_page(self, korean_texts, english_texts=None, page_number=1, manga_id=None, chapter=None) -> list[dict]:
         if not korean_texts:
             return []
+
+        self._memory_context = get_memory_context(manga_id) if manga_id else ""
+        self._memory_glossary = get_memory_glossary(manga_id) if manga_id else {}
 
         for name, call_fn in self._providers:
             try:
@@ -303,13 +316,16 @@ class LLMTranslator:
                     print(f"  [LLM] {name} → rate limited, next...")
                     continue
                 self.add_context(korean_texts)
+                for i, ko in enumerate(korean_texts):
+                    if i < len(result):
+                        result[i]["ko"] = ko
                 return result
             except Exception as e:
                 print(f"  [LLM] {name} → error: {e}")
                 continue
 
         print(f"  [LLM] All providers failed, returning originals")
-        return [{"id": i + 1, "ru": text} for i, text in enumerate(korean_texts)]
+        return [{"id": i + 1, "ko": t, "ru": t} for i, t in enumerate(korean_texts)]
 
     async def translate_sfx(self, korean_sfx, english_sfx="") -> str:
         if english_sfx:

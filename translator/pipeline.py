@@ -12,6 +12,7 @@ from translator.renderer import TextRenderer
 from translator.colab_client import ColabClient
 from translator.inpainter import LaMaInpainter
 from config import TEMP_DIR
+from config.memory import save_translations
 
 
 def _filter_text_regions(ocr_texts: list[dict], img_w: int, img_h: int) -> list[dict]:
@@ -196,6 +197,8 @@ class TranslationPipeline:
                 korean_texts=grouped_ko,
                 english_texts=en_texts,
                 page_number=i + 1,
+                manga_id=mangadex_manga_id,
+                chapter=chapter_number,
             )
 
             await self._report(f"Обработка стр. {i + 1}/{total_pages}", progress, 100)
@@ -281,6 +284,10 @@ class TranslationPipeline:
             out_path = work_dir / f"page_{i:03d}.png"
             out_path.write_bytes(out_data)
             translated_page_paths.append(str(out_path))
+
+            pairs_for_memory = [{"ko": t.get("ko", ""), "ru": t.get("ru", "")} for t in translations if t.get("ko") and t.get("ru")]
+            if pairs_for_memory:
+                save_translations(mangadex_manga_id, mangadex_manga_id[:8], chapter_number, pairs_for_memory)
 
             del src_data, en_data, out_data
             gc.collect()
