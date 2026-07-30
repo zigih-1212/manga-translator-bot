@@ -20,6 +20,8 @@ try:
 except ImportError:
     log.warning("Modal SDK not installed, using REST API fallback")
 
+MODAL_AVAILABLE = bool(MODAL_TOKEN_ID and MODAL_TOKEN_SECRET)
+
 
 def inpaint_batch_sync(images: list[bytes], dilation: int = 5, radius: int = 10) -> list[bytes] | None:
     if not MODAL_TOKEN_ID or not MODAL_TOKEN_SECRET:
