@@ -152,7 +152,7 @@ class TranslationPipeline:
             await self.progress_callback(message, current, total)
 
     @staticmethod
-    def _fill_bubble_bg(cv_img: np.ndarray, bubble_bboxes: list[tuple], iterations: int = 2) -> np.ndarray:
+    def _fill_bubble_bg(cv_img: np.ndarray, bubble_bboxes: list[tuple], iterations: int = 2) -> tuple[np.ndarray, np.ndarray]:
         filled = cv_img.copy()
         bg_mask = np.zeros((cv_img.shape[0], cv_img.shape[1]), dtype=np.uint8)
         for (x1, y1, x2, y2) in bubble_bboxes:
@@ -180,6 +180,33 @@ class TranslationPipeline:
             except Exception:
                 pass
         return filled, bg_mask
+
+    @staticmethod
+    def _auto_rotate(page_data: bytes) -> bytes:
+        try:
+            np_img = np.frombuffer(page_data, np.uint8)
+            cv_img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+            if cv_img is None:
+                return page_data
+            gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
+            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            coords = np.column_stack(np.where(binary > 0))
+            if len(coords) < 100:
+                return page_data
+            angle = cv2.minAreaRect(coords)[-1]
+            if angle < -45:
+                angle = -(90 + angle)
+            else:
+                angle = -angle
+            if abs(angle) > 1.0:
+                h, w = cv_img.shape[:2]
+                M = cv2.getRotationMatrix2D((w // 2, h // 2), angle, 1.0)
+                cv_img = cv2.warpAffine(cv_img, M, (w, h), borderMode=cv2.BORDER_REFLECT)
+                _, buf = cv2.imencode(".png", cv_img)
+                return buf.tobytes()
+        except Exception:
+            pass
+        return page_data
 
     async def process_chapter(
         self,
@@ -236,7 +263,8 @@ class TranslationPipeline:
             )
             try:
                 src_data = await self.mangadex.download_page(src_pages[i])
-            if self._upscaler.available:
+                src_data = self._auto_rotate(src_data)
+                if self._upscaler.available:
                 try:
                     np_img = np.frombuffer(src_data, np.uint8)
                     cv_img_up = cv2.imdecode(np_img, cv2.IMREAD_COLOR)

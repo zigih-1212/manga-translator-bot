@@ -2,8 +2,8 @@ import cv2
 import numpy as np
 
 
-MIN_BUBBLE_W = 100
-MIN_BUBBLE_H = 40
+MIN_BUBBLE_W = 80
+MIN_BUBBLE_H = 30
 
 
 def _find_bubble_contour(img_bgr, text_bbox):
@@ -11,34 +11,57 @@ def _find_bubble_contour(img_bgr, text_bbox):
     cx = (tx1 + tx2) // 2
     cy = (ty1 + ty2) // 2
     h, w = img_bgr.shape[:2]
-    expand = int(max(tx2 - tx1, ty2 - ty1) * 1.5)
-    expand = max(expand, 80)
+    expand = int(max(tx2 - tx1, ty2 - ty1) * 2.0)
+    expand = max(expand, 120)
     rx1 = max(0, tx1 - expand)
     ry1 = max(0, ty1 - expand)
     rx2 = min(w, tx2 + expand)
     ry2 = min(h, ty2 + expand)
     region = img_bgr[ry1:ry2, rx1:rx2]
     gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    _, binary = cv2.threshold(blurred, 220, 255, cv2.THRESH_BINARY)
-    kernel = np.ones((7, 7), np.uint8)
-    closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    masks = []
+    for thresh_val in [200, 220, 240]:
+        _, binary = cv2.threshold(gray, thresh_val, 255, cv2.THRESH_BINARY)
+        kernel_close = np.ones((9, 9), np.uint8)
+        closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel_close, iterations=2)
+        kernel_open = np.ones((5, 5), np.uint8)
+        cleaned = cv2.morphologyEx(closed, cv2.MORPH_OPEN, kernel_open, iterations=1)
+        masks.append(cleaned)
+
+    merged = cv2.bitwise_or(masks[0], cv2.bitwise_or(masks[1], masks[2]))
+
+    kernel_diag = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+    merged = cv2.dilate(merged, kernel_diag, iterations=1)
+
+    contours, _ = cv2.findContours(merged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     best = None
-    best_area = 0
+    best_score = 0
     lcx, lcy = cx - rx1, cy - ry1
     for cnt in contours:
-        if cv2.pointPolygonTest(cnt, (float(lcx), float(lcy)), False) >= 0:
-            area = cv2.contourArea(cnt)
-            if area > best_area:
-                best_area = area
-                best = cnt
+        if cv2.pointPolygonTest(cnt, (float(lcx), float(lcy)), False) < 0:
+            continue
+        area = cv2.contourArea(cnt)
+        if area < 500:
+            continue
+        x, y, cw, ch = cv2.boundingRect(cnt)
+        if cw < MIN_BUBBLE_W * 0.5 or ch < MIN_BUBBLE_H * 0.5:
+            continue
+        aspect = cw / max(ch, 1)
+        if aspect > 15 or aspect < 0.1:
+            continue
+        dist_to_center = abs(x + cw // 2 - lcx) + abs(y + ch // 2 - lcy)
+        score = area / (1 + dist_to_center * 0.001)
+        if score > best_score:
+            best_score = score
+            best = cnt
+
     if best is not None:
         bx, by, bw, bh = cv2.boundingRect(best)
-        x1 = max(0, rx1 + bx - 8)
-        y1 = max(0, ry1 + by - 8)
-        x2 = min(w, rx1 + bx + bw + 8)
-        y2 = min(h, ry1 + by + bh + 8)
+        x1 = max(0, rx1 + bx - 12)
+        y1 = max(0, ry1 + by - 12)
+        x2 = min(w, rx1 + bx + bw + 12)
+        y2 = min(h, ry1 + by + bh + 12)
         return (x1, y1, x2, y2)
     return None
 
@@ -78,4 +101,5 @@ def build_mask(img_h, img_w, all_bubble_bboxes, pad=10):
         x2 = min(img_w, x2 + pad)
         y2 = min(img_h, y2 + pad)
         mask[y1:y2, x1:x2] = 255
-    return cv2.dilate(mask, np.ones((5, 5), np.uint8), iterations=2)
+    kernel = np.ones((7, 7), np.uint8)
+    return cv2.dilate(mask, kernel, iterations=3)
