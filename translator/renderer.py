@@ -4,6 +4,7 @@ import json
 import re
 import os
 import platform
+import numpy as np
 from cfg import FONTS, FONTS_PATH
 
 
@@ -37,6 +38,73 @@ def _scan_all_fonts() -> list[dict]:
                 "keywords": keywords,
             })
     return results
+
+
+def _extract_text_color(
+    original_img: Image.Image,
+    bubble_mask: Image.Image,
+    bbox: tuple[int, int, int, int],
+) -> tuple[int, int, int]:
+    """
+    Extract actual text color from bubble using k-means on edge pixels.
+    Returns RGB tuple (r, g, b).
+    """
+    x1, y1, x2, y2 = bbox
+    bw, bh = x2 - x1, y2 - y1
+    if bw <= 0 or bh <= 0:
+        return (0, 0, 0)
+
+    # Crop bubble region
+    orig_crop = np.array(original_img.crop((x1, y1, x2, y2)), dtype=np.float32)
+    mask_crop = np.array(bubble_mask.crop((x1, y1, x2, y2)).convert("L"), dtype=np.uint8)
+
+    # Find edge pixels (text is typically near mask boundary)
+    edge_pixels = []
+    for i in range(bh):
+        for j in range(bw):
+            if mask_crop[i, j] > 128:
+                # Check if this is near boundary (text pixels)
+                is_edge = False
+                for di in (-1, 0, 1):
+                    for dj in (-1, 0, 1):
+                        ni, nj = i + di, j + dj
+                        if 0 <= ni < bh and 0 <= nj < bw and mask_crop[ni, nj] <= 128:
+                            is_edge = True
+                            break
+                    if is_edge:
+                        break
+                if is_edge:
+                    edge_pixels.append(orig_crop[i, j])
+
+    if not edge_pixels:
+        return (0, 0, 0)
+
+    edge_pixels = np.array(edge_pixels)
+
+    # Simple 2-cluster k-means (text color vs background)
+    # Initialize with darkest and brightest pixels
+    brightness = np.mean(edge_pixels, axis=1)
+    idx_dark = np.argmin(brightness)
+    idx_bright = np.argmax(brightness)
+    centers = edge_pixels[[idx_dark, idx_bright]].copy().astype(np.float32)
+
+    for _ in range(10):  # max iterations
+        dists = np.sum((edge_pixels[:, None] - centers[None]) ** 2, axis=2)
+        labels = np.argmin(dists, axis=1)
+        new_centers = np.array([
+            edge_pixels[labels == 0].mean(axis=0) if np.any(labels == 0) else centers[0],
+            edge_pixels[labels == 1].mean(axis=0) if np.any(labels == 1) else centers[1],
+        ])
+        if np.allclose(centers, new_centers):
+            break
+        centers = new_centers
+
+    # Choose the cluster that represents text (usually smaller, darker cluster)
+    counts = np.bincount(labels, minlength=2)
+    text_cluster = 0 if counts[0] < counts[1] else 1
+    text_color = centers[text_cluster].astype(np.uint8)
+
+    return tuple(int(c) for c in text_color)
 
 
 FONT_CATEGORIES = {
@@ -283,11 +351,26 @@ class TextRenderer:
         original_img: Image.Image | None = None,
     ) -> Image.Image:
         img = img.copy()
-        brightness = self._estimate_brightness(img, bbox)
-        if brightness < 128:
-            font_color, outline_color = "white", "black"
+        # Extract actual text color from original
+        if original_img is not None and is_bubble:
+            bubble_mask = self._get_bubble_mask_region(img.width, img.height, bbox)
+            text_color = _extract_text_color(original_img, bubble_mask, bbox)
+            # Determine if dark or light text based on brightness
+            avg_brightness = sum(text_color) / 3
+            if avg_brightness < 128:
+                font_color = text_color
+                outline_color = tuple(min(255, c + 60) for c in text_color)
+            else:
+                font_color = tuple(max(0, c - 60) for c in text_color)
+                outline_color = text_color
         else:
-            font_color, outline_color = "black", "white"
+            # Fallback to brightness-based
+            brightness = self._estimate_brightness(img, bbox)
+            if brightness < 128:
+                font_color, outline_color = "white", "black"
+            else:
+                font_color, outline_color = "black", "white"
+
         if not is_bubble:
             white_bg = Image.new("RGB", (bbox[2] - bbox[0], bbox[3] - bbox[1]), (255, 255, 255))
             img.paste(white_bg, (bbox[0], bbox[1]))
@@ -328,11 +411,25 @@ class TextRenderer:
             bubble_mask = self._get_bubble_mask_region(img.width, img.height, bbox)
         else:
             bubble_mask = None
-        brightness = self._estimate_brightness(img, bbox)
-        if brightness < 128:
-            font_color, outline_color = "white", "black"
+
+        # Extract actual text color from original
+        if original_img is not None and is_bubble and bubble_mask:
+            text_color = _extract_text_color(original_img, bubble_mask, bbox)
+            avg_brightness = sum(text_color) / 3
+            if avg_brightness < 128:
+                font_color = text_color
+                outline_color = tuple(min(255, c + 60) for c in text_color)
+            else:
+                font_color = tuple(max(0, c - 60) for c in text_color)
+                outline_color = text_color
         else:
-            font_color, outline_color = "black", "white"
+            # Fallback to brightness-based
+            brightness = self._estimate_brightness(img, bbox)
+            if brightness < 128:
+                font_color, outline_color = "white", "black"
+            else:
+                font_color, outline_color = "black", "white"
+
         if not is_bubble:
             white_bg = Image.new("RGB", (bw, bh), (255, 255, 255))
             img.paste(white_bg, (x1, y1))
