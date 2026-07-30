@@ -218,6 +218,32 @@ class TextRenderer:
         pixels = list(gray.getdata())
         return sum(pixels) / len(pixels) if pixels else 255
 
+    @staticmethod
+    def _get_bubble_mask_region(img_w: int, img_h: int, bbox: tuple) -> Image.Image:
+        x1, y1, x2, y2 = bbox
+        mask = Image.new("L", (img_w, img_h), 0)
+        draw = ImageDraw.Draw(mask)
+        pad = 5
+        draw.rounded_rectangle([x1 - pad, y1 - pad, x2 + pad, y2 + pad], radius=15, fill=255)
+        return mask
+
+    @staticmethod
+    def _colorize_inpainted(original_img: Image.Image, inpainted_img: Image.Image, bbox: tuple, fallback_color: tuple = None) -> Image.Image:
+        x1, y1, x2, y2 = bbox
+        orig_crop = original_img.crop((x1, y1, x2, y2))
+        inp_crop = inpainted_img.crop((x1, y1, x2, y2))
+        orig_arr = np.array(orig_crop, dtype=np.float32)
+        inp_arr = np.array(inp_crop, dtype=np.float32)
+        diff = orig_arr - inp_arr
+        gray_diff = np.mean(np.abs(diff), axis=2)
+        is_gray = gray_diff.mean() < 10
+        if is_gray and fallback_color:
+            result = np.where(orig_arr.mean(axis=2, keepdims=True) < 15, inp_arr, orig_arr)
+        else:
+            result = inp_arr * 0.3 + orig_arr * 0.7
+        result = result.clip(0, 255).astype(np.uint8)
+        return Image.fromarray(result)
+
     def render_bubble_text(
         self,
         img: Image.Image,
@@ -226,12 +252,54 @@ class TextRenderer:
         font_type: str = "dialogue",
         outline_width: int = 2,
         is_bubble: bool = True,
+        original_img: Image.Image | None = None,
     ) -> Image.Image:
         img = img.copy()
-        draw = ImageDraw.Draw(img)
+        brightness = self._estimate_brightness(img, bbox)
+        if brightness < 128:
+            font_color, outline_color = "white", "black"
+        else:
+            font_color, outline_color = "black", "white"
+        if not is_bubble:
+            white_bg = Image.new("RGB", (bbox[2] - bbox[0], bbox[3] - bbox[1]), (255, 255, 255))
+            img.paste(white_bg, (bbox[0], bbox[1]))
+        pad = 10
+        font_path = self._get_font_path(font_type, text)
+        font = self._fit_text(ImageDraw.Draw(img), text, bbox[2] - bbox[0] - pad * 2, bbox[3] - bbox[1] - pad * 2, font_path)
+        lines = self._wrap_text(text, font, bbox[2] - bbox[0] - pad * 2)
+        line_height = font.getbbox("Аg")[3] - font.getbbox("Аg")[1] + 2
+        total_height = line_height * len(lines)
+        start_y = bbox[1] + (bbox[3] - bbox[1] - total_height) // 2
+        for i, line in enumerate(lines):
+            bbox_line = ImageDraw.Draw(img).textbbox((0, 0), line, font=font)
+            lw = bbox_line[2] - bbox_line[0]
+            lx = bbox[0] + (bbox[2] - bbox[0] - lw) // 2
+            ly = start_y + i * line_height
+            for dx in range(-outline_width, outline_width + 1):
+                for dy in range(-outline_width, outline_width + 1):
+                    if dx != 0 or dy != 0:
+                        ImageDraw.Draw(img).text((lx + dx, ly + dy), line, font=font, fill=outline_color)
+            ImageDraw.Draw(img).text((lx, ly), line, font=font, fill=font_color)
+        return img
+
+    def render_text_in_bubble_shape(
+        self,
+        img: Image.Image,
+        bbox: tuple[int, int, int, int],
+        text: str,
+        font_type: str = "dialogue",
+        outline_width: int = 2,
+        is_bubble: bool = True,
+        original_img: Image.Image | None = None,
+    ) -> Image.Image:
+        img = img.copy()
         x1, y1, x2, y2 = bbox
         bw = x2 - x1
         bh = y2 - y1
+        if is_bubble:
+            bubble_mask = self._get_bubble_mask_region(img.width, img.height, bbox)
+        else:
+            bubble_mask = None
         brightness = self._estimate_brightness(img, bbox)
         if brightness < 128:
             font_color, outline_color = "white", "black"
@@ -240,24 +308,33 @@ class TextRenderer:
         if not is_bubble:
             white_bg = Image.new("RGB", (bw, bh), (255, 255, 255))
             img.paste(white_bg, (x1, y1))
-            draw = ImageDraw.Draw(img)
         pad = 10
         font_path = self._get_font_path(font_type, text)
-        font = self._fit_text(draw, text, bw - pad * 2, bh - pad * 2, font_path)
+        font = self._fit_text(ImageDraw.Draw(img), text, bw - pad * 2, bh - pad * 2, font_path)
         lines = self._wrap_text(text, font, bw - pad * 2)
         line_height = font.getbbox("Аg")[3] - font.getbbox("Аg")[1] + 2
         total_height = line_height * len(lines)
         start_y = y1 + (bh - total_height) // 2
+        text_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        text_draw = ImageDraw.Draw(text_layer)
         for i, line in enumerate(lines):
-            bbox_line = draw.textbbox((0, 0), line, font=font)
+            bbox_line = text_draw.textbbox((0, 0), line, font=font)
             lw = bbox_line[2] - bbox_line[0]
             lx = x1 + (bw - lw) // 2
             ly = start_y + i * line_height
             for dx in range(-outline_width, outline_width + 1):
                 for dy in range(-outline_width, outline_width + 1):
                     if dx != 0 or dy != 0:
-                        draw.text((lx + dx, ly + dy), line, font=font, fill=outline_color)
-            draw.text((lx, ly), line, font=font, fill=font_color)
+                        text_draw.text((lx + dx, ly + dy), line, font=font, fill=outline_color + (255,))
+            text_draw.text((lx, ly), line, font=font, fill=font_color + (255,))
+        if bubble_mask:
+            img = img.convert("RGBA")
+            img.paste(Image.composite(text_layer, Image.new("RGBA", img.size, (0, 0, 0, 0)), bubble_mask.convert("L").point(lambda x: 255 if x > 128 else 0)), (0, 0))
+            img = img.convert("RGB")
+        else:
+            img = Image.alpha_composite(img.convert("RGBA"), text_layer).convert("RGB")
+        if original_img is not None:
+            img = self._colorize_inpainted(original_img, img, bbox, fallback_color=(240, 240, 240))
         return img
 
     def render_sfx(
