@@ -19,6 +19,7 @@ image = (
         "Pillow>=10.0.0",
         "onnxruntime>=1.17.0",
         "pydantic>=2.0.0",
+        "fastapi>=0.110.0",
     )
     .run_commands(
         "mkdir -p /models",
@@ -110,6 +111,7 @@ class InpaintRequest(BaseModel):
     radius: int = 10
 
 
+@app.function(image=image)
 @fastapi_endpoint(method="POST")
 def inpaint_api(request: InpaintRequest):
     result = inpaint_batch.local(request.images_b64, request.dilation, request.radius)
