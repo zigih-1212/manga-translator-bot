@@ -21,9 +21,20 @@ def _make_client(timeout=60.0):
     return httpx.AsyncClient(timeout=timeout)
 
 
-SYSTEM_PROMPT = """You are a professional manga/manhwa translator (Korean→Russian).
+LANG_NAMES = {
+    "ko": ("Korean", "корейский"),
+    "en": ("English", "английский"),
+    "ja": ("Japanese", "японский"),
+    "zh": ("Chinese", "китайский"),
+}
 
-Translate each numbered Korean text bubble into natural Russian.
+
+def _system_prompt(source_lang: str = "ko") -> str:
+    src_name, tgt_name = LANG_NAMES.get(source_lang, ("Korean", "русский"))
+    tgt_ru = "русский"
+    return f"""You are a professional manga/manhwa translator ({src_name}→{tgt_ru}).
+
+Translate each numbered {src_name} text bubble into natural {tgt_ru}.
 
 CRITICAL — ANTI-HALLUCINATION RULES:
 1. OCR output may contain garbage characters. Distinguish real words from OCR noise (random chars like "DF", "VV", "ABHCH", "asdkj", single letters alone).
@@ -34,20 +45,20 @@ CRITICAL — ANTI-HALLUCINATION RULES:
 
 RULES:
 1. Each translation must be 1-2 short sentences max. Keep it brief.
-2. Use natural conversational Russian. Short words, simple grammar.
+2. Use natural conversational {tgt_ru}. Short words, simple grammar.
 3. If a bubble has 1-2 words, expand into a short natural phrase from context.
 4. Character speech must match their personality (polite, rude, excited, etc.)
-5. SFX (sound effects like 히익, 큭, 드륵, 쾅, 쿵, 탁, etc.) — DO NOT translate. Return original text as-is.
-6. NEVER return empty text unless the source is garbage OCR noise. Never return the original Korean when it has real words.
+5. SFX (sound effects like ヒヒ, バキ, DOOM, WHOOSH, etc.) — DO NOT translate. Return original text as-is.
+6. If original is {src_name} with real words — NEVER return empty text or original. If original is garbage OCR noise — return empty string "".
 7. DO NOT add narrator marks, quotes, or explanations.
 
 CRITICAL — length limit: maximum 50 characters per bubble. Shorter is better.
 
 Respond ONLY with JSON array:
-[{"id": 1, "ru": "translation"}, {"id": 2, "ru": "translation"}, ...]"""
+[{{"id": 1, "ru": "translation"}}, {{"id": 2, "ru": "translation"}}, ...]"""
 
 
-def _build_prompt(korean_texts, english_texts, page_number, context, glossary, memory_context="", memory_glossary=None):
+def _build_prompt(korean_texts, english_texts, page_number, context, glossary, memory_context="", memory_glossary=None, source_lang="ko"):
     parts = []
     if memory_context:
         parts.append("PREVIOUS CHAPTERS (translations of this manga from earlier chapters):\n" + memory_context)
