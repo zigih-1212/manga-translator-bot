@@ -1,10 +1,13 @@
 import json
 import gc
+import asyncio
 from pathlib import Path
 from PIL import Image
 import io
 import numpy as np
 import cv2
+from dataclasses import dataclass, field
+from typing import Optional, List, Dict, Any
 
 from sources.mangadex import MangaDexSource
 from translator.llm import LLMTranslator
@@ -133,6 +136,51 @@ def _group_texts_by_bubble(ocr_texts: list[dict], y_gap: int = 30) -> list[list[
     return rows
 
 
+@dataclass
+class PageRaw:
+    index: int
+    src_data: bytes
+    en_data: Optional[bytes]
+    src_url: str
+    en_url: Optional[str]
+    img_w: int = 0
+    img_h: int = 0
+
+
+@dataclass
+class PageOCR:
+    index: int
+    src_data: bytes
+    en_data: Optional[bytes]
+    ocr_texts: List[Dict]
+    en_texts: List[str]
+    groups: List[List[Dict]]
+    grouped_ko: List[str]
+    img_w: int = 0
+    img_h: int = 0
+    is_credit: bool = False
+
+
+@dataclass
+class PageTranslated:
+    index: int
+    src_data: bytes
+    en_data: Optional[bytes]
+    translations: List[Dict]
+    ocr_texts: List[Dict]
+    groups: List[List[Dict]]
+    grouped_ko: List[str]
+    img_w: int = 0
+    img_h: int = 0
+
+
+@dataclass
+class PageRendered:
+    index: int
+    out_data: bytes
+    translations: List[Dict]
+
+
 class TranslationPipeline:
     def __init__(self):
         self.mangadex = MangaDexSource()
@@ -240,7 +288,6 @@ class TranslationPipeline:
             await self._report("Нет страниц!", 0, 1)
             return []
 
-        en_pages = []
         en_page_map = {}
         if en_chapter:
             await self._report(f"Получаем список страниц {target_lang}...", 7, 100)
@@ -248,193 +295,360 @@ class TranslationPipeline:
             en_page_map = {p.index: p for p in en_pages}
 
         self.translator.clear_context()
-        translated_page_paths = []
 
-        for i in range(total_pages):
-            progress = 10 + int(80 * i / total_pages)
-            await self._report(
-                f"Страница {i + 1}/{total_pages}",
-                progress, 100
-            )
+        # ========== ASYNC PIPELINE STAGES ==========
+        # Stage 1: Downloader -> raw_queue
+        # Stage 2: Preprocessor (auto-rotate, upscale, OCR) -> ocr_queue
+        # Stage 3: Translator -> translated_queue
+        # Stage 4: Inpainter + Renderer -> rendered_queue
+        # Stage 5: Saver -> done
 
-            await self._report(
-                f"Скачиваем стр. {i + 1}/{total_pages} ({source_lang})",
-                progress, 100
-            )
-            try:
-                src_data = await self.mangadex.download_page(src_pages[i])
-                src_data = self._auto_rotate(src_data)
-                if self._upscaler.available:
+        raw_queue = asyncio.Queue()
+        ocr_queue = asyncio.Queue()
+        translated_queue = asyncio.Queue()
+        rendered_queue = asyncio.Queue()
+        done_event = asyncio.Event()
+
+        # Results storage for final collection
+        rendered_results = {}
+        results_lock = asyncio.Lock()
+
+        # ---- Stage 1: Downloader (fetches pages) ----
+        async def stage_downloader():
+            sem = asyncio.Semaphore(3)  # max 3 concurrent downloads
+            async def download_one(i: int):
+                async with sem:
                     try:
-                        np_img = np.frombuffer(src_data, np.uint8)
-                        cv_img_up = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
-                        cv_img_up = self._upscaler.upscale(cv_img_up)
-                        _, src_data = cv2.imencode(".png", cv_img_up)
-                        src_data = src_data.tobytes()
-                    except Exception:
-                        pass
-            except Exception as e:
-                await self._report(f"Ошибка скачивания стр. {i+1}: {e}", progress, 100)
-                continue
+                        src_data = await self.mangadex.download_page(src_pages[i])
+                        en_data = None
+                        if i in en_page_map:
+                            en_data = await self.mangadex.download_page(en_page_map[i])
+                        # Get image dimensions
+                        tmp_img = Image.open(io.BytesIO(src_data))
+                        img_w, img_h = tmp_img.size
+                        tmp_img.close()
+                        return {
+                            "index": i,
+                            "src_data": src_data,
+                            "en_data": en_data,
+                            "img_w": img_w,
+                            "img_h": img_h,
+                        }
+                    except Exception as e:
+                        await self._report(f"Ошибка скачивания стр. {i+1}: {e}", 10 + int(80 * i / total_pages), 100)
+                        return None
 
-            en_data = None
-            if i in en_page_map:
-                try:
-                    en_data = await self.mangadex.download_page(en_page_map[i])
-                except Exception:
-                    pass
+            # Launch all downloads with limited concurrency
+            tasks = [asyncio.create_task(download_one(i)) for i in range(total_pages)]
+            for i, task in enumerate(tasks):
+                result = await task
+                if result:
+                    await raw_queue.put(result)
+                else:
+                    await raw_queue.put({"index": i, "error": True})
+            await raw_queue.put(None)  # sentinel
 
-            if self.colab.is_connected:
-                await self._report(f"OCR стр. {i + 1}/{total_pages}", progress, 100)
-                try:
-                    ocr_result = await self.colab.ocr_pages([src_data], lang=source_lang)
-                    ocr_texts = ocr_result[0] if ocr_result else []
-                except Exception as e:
-                    await self._report(f"OCR недоступен: {e}", progress, 100)
-                    ocr_texts = []
-                try:
-                    tmp_img = Image.open(io.BytesIO(src_data))
-                    img_w, img_h = tmp_img.size
-                    tmp_img.close()
-                    ocr_texts = _filter_text_regions(ocr_texts, img_w, img_h)
-                    if ocr_texts and _is_credit_page(ocr_texts, img_w, img_h):
-                        await self._report(f"Credit-страница {i + 1}, пропускаю", progress, 100)
+        # ---- Stage 2: Preprocessor (auto-rotate, upscale, OCR) ----
+        async def stage_preprocessor():
+            sem = asyncio.Semaphore(2)  # max 2 concurrent OCR
+            async def preprocess(item):
+                if item.get("error"):
+                    await ocr_queue.put({"index": item["index"], "error": True})
+                    return
+                async with sem:
+                    idx = item["index"]
+                    src_data = item["src_data"]
+                    en_data = item["en_data"]
+                    img_w = item["img_w"]
+                    img_h = item["img_h"]
+
+                    try:
+                        # Auto-rotate
+                        src_data = self._auto_rotate(src_data)
+
+                        # Upscale if available
+                        if self._upscaler.available:
+                            try:
+                                np_img = np.frombuffer(src_data, np.uint8)
+                                cv_img_up = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+                                cv_img_up = self._upscaler.upscale(cv_img_up)
+                                _, src_data = cv2.imencode(".png", cv_img_up)
+                                src_data = src_data.tobytes()
+                            except Exception:
+                                pass
+
+                        # OCR source
                         ocr_texts = []
-                except Exception:
-                    pass
-            else:
-                ocr_texts = []
+                        if self.colab.is_connected:
+                            try:
+                                ocr_result = await self.colab.ocr_pages([src_data], lang=source_lang)
+                                ocr_texts = ocr_result[0] if ocr_result else []
+                            except Exception:
+                                ocr_texts = []
+                        ocr_texts = _filter_text_regions(ocr_texts, img_w, img_h)
 
-            ko_texts = [r.get("text", "") for r in ocr_texts if r.get("text")]
+                        # Credit page detection
+                        is_credit = False
+                        if ocr_texts and _is_credit_page(ocr_texts, img_w, img_h):
+                            is_credit = True
+                            ocr_texts = []
 
-            en_texts = []
-            if en_data and ocr_texts:
-                if self.colab.is_connected:
-                    try:
-                        en_ocr = await self.colab.ocr_pages([en_data], lang=target_lang)
-                        en_texts = [r.get("text", "") for r in (en_ocr[0] if en_ocr else []) if r.get("text")]
-                    except Exception:
-                        pass
+                        # Group texts
+                        groups = _group_texts_by_bubble(ocr_texts)
+                        grouped_ko = [" ".join(r.get("text", "") for r in g if r.get("text")) for g in groups]
 
-            if not ko_texts:
-                out_path = work_dir / f"page_{i:03d}.png"
-                out_path.write_bytes(src_data)
-                translated_page_paths.append(str(out_path))
-                del src_data, en_data
-                gc.collect()
-                continue
+                        # OCR English reference
+                        en_texts = []
+                        if en_data and ocr_texts and self.colab.is_connected:
+                            try:
+                                en_ocr = await self.colab.ocr_pages([en_data], lang=target_lang)
+                                en_texts = [r.get("text", "") for r in (en_ocr[0] if en_ocr else []) if r.get("text")]
+                            except Exception:
+                                pass
 
-            groups = _group_texts_by_bubble(ocr_texts)
-            grouped_ko = [" ".join(r.get("text", "") for r in g if r.get("text")) for g in groups]
+                        await ocr_queue.put({
+                            "index": item["index"],
+                            "src_data": src_data,
+                            "en_data": en_data,
+                            "ocr_texts": ocr_texts,
+                            "en_texts": en_texts,
+                            "groups": groups,
+                            "grouped_ko": grouped_ko,
+                            "img_w": img_w,
+                            "img_h": img_h,
+                            "is_credit": is_credit,
+                        })
+                    except Exception as e:
+                        await self._report(f"Preprocess error page {idx+1}: {e}", 10 + int(80 * idx / total_pages), 100)
+                        await ocr_queue.put({"index": item["index"], "error": True})
 
-            await self._report(f"Перевод стр. {i + 1}/{total_pages}", progress, 100)
-            translations = await self.translator.translate_page(
-                korean_texts=grouped_ko,
-                english_texts=en_texts,
-                page_number=i + 1,
-                manga_id=mangadex_manga_id,
-                chapter=chapter_number,
-                source_lang=source_lang,
-            )
+            while True:
+                item = await raw_queue.get()
+                if item is None:  # sentinel
+                    await ocr_queue.put(None)
+                    raw_queue.task_done()
+                    break
+                await preprocess(item)
+                raw_queue.task_done()
 
-            await self._report(f"Обработка стр. {i + 1}/{total_pages}", progress, 100)
-            try:
-                img = Image.open(io.BytesIO(src_data)).convert("RGB")
-                cv_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-                h, w = cv_img.shape[:2]
+        # ---- Stage 3: Translator ----
+        async def stage_translator():
+            while True:
+                item = await ocr_queue.get()
+                if item is None:  # sentinel
+                    await translated_queue.put(None)
+                    ocr_queue.task_done()
+                    break
 
-                bubble_pairs = []
-                all_bubble_bboxes = []
-                is_bubble_flags = []
-                for g_idx, group in enumerate(groups):
-                    ru = translations[g_idx].get("ru", "").strip() if g_idx < len(translations) else ""
-                    if not ru:
-                        continue
-                    xs, ys = [], []
-                    for r in group:
-                        bb = r.get("bbox", [])
-                        if not bb:
-                            continue
-                        if isinstance(bb[0], (list, tuple)):
-                            xs.extend(int(p[0]) for p in bb)
-                            ys.extend(int(p[1]) for p in bb)
-                        else:
-                            xs.extend([bb[0], bb[2]])
-                            ys.extend([bb[1], bb[3]])
-                    if not xs:
-                        continue
-                    text_bbox = (min(xs), min(ys), max(xs), max(ys))
-                    bubble_bbox, is_bubble = get_bubble_bounds(cv_img, text_bbox, w, h)
-                    all_bubble_bboxes.append(bubble_bbox)
-                    bubble_pairs.append((bubble_bbox, ru, is_bubble))
-                    is_bubble_flags.append(is_bubble)
-
-                if not bubble_pairs:
-                    out_path = work_dir / f"page_{i:03d}.png"
-                    out_path.write_bytes(src_data)
-                    translated_page_paths.append(str(out_path))
-                    del src_data, en_data, img, cv_img
-                    gc.collect()
+                if item.get("error") or item.get("is_credit"):
+                    await translated_queue.put({
+                        "index": item["index"],
+                        "src_data": item.get("src_data"),
+                        "en_data": item.get("en_data"),
+                        "translations": [],
+                        "ocr_texts": item.get("ocr_texts", []),
+                        "groups": item.get("groups", []),
+                        "grouped_ko": item.get("grouped_ko", []),
+                        "img_w": item.get("img_w", 0),
+                        "img_h": item.get("img_h", 0),
+                        "skip_render": True,
+                    })
+                    ocr_queue.task_done()
                     continue
 
-                filled_img, self._bg_mask = self._fill_bubble_bg(cv_img, all_bubble_bboxes)
+                idx = item["index"]
+                grouped_ko = item["grouped_ko"]
+                en_texts = item["en_texts"]
+                img_w = item["img_w"]
+                img_h = item["img_h"]
 
-                mask = build_mask(h, w, all_bubble_bboxes)
-                for r in ocr_texts:
-                    poly = r.get("polygon")
-                    if poly:
-                        pts = np.array([[(p[0], p[1]) for p in poly]], dtype=np.int32)
-                        cv2.fillPoly(mask, pts, 255)
+                try:
+                    await self._report(f"Перевод стр. {idx+1}/{total_pages}", 10 + int(80 * idx / total_pages), 100)
+                    translations = await self.translator.translate_page(
+                        korean_texts=grouped_ko,
+                        english_texts=item["en_texts"],
+                        page_number=idx + 1,
+                        manga_id=mangadex_manga_id,
+                        chapter=chapter_number,
+                        source_lang=source_lang,
+                    )
+                except Exception as e:
+                    await self._report(f"Перевод ошибка стр. {idx+1}: {e}", 10 + int(80 * idx / total_pages), 100)
+                    translations = []
 
-                remaining = cv2.bitwise_and(mask, cv2.bitwise_not(self._bg_mask))
+                await translated_queue.put({
+                    "index": idx,
+                    "src_data": item["src_data"],
+                    "en_data": item.get("en_data"),
+                    "translations": translations,
+                    "ocr_texts": item["ocr_texts"],
+                    "groups": item["groups"],
+                    "grouped_ko": grouped_ko,
+                    "img_w": img_w,
+                    "img_h": img_h,
+                })
+                ocr_queue.task_done()
 
-                if cv2.countNonZero(remaining) == 0:
-                    clean_img = Image.fromarray(cv2.cvtColor(filled_img, cv2.COLOR_BGR2RGB))
-                elif MODAL_AVAILABLE:
-                    _, img_bytes = cv2.imencode(".png", filled_img)
-                    modal_result = inpaint_batch_sync([img_bytes.tobytes()])
-                    if modal_result:
-                        modal_img = cv2.imdecode(np.frombuffer(modal_result[0], np.uint8), cv2.IMREAD_COLOR)
-                        clean_img = Image.fromarray(cv2.cvtColor(modal_img, cv2.COLOR_BGR2RGB))
-                        del modal_img
-                    else:
-                        c = self.inpainter.inpaint(filled_img, remaining)
-                        clean_img = Image.fromarray(cv2.cvtColor(c, cv2.COLOR_BGR2RGB))
-                        del c
-                else:
-                    c = self.inpainter.inpaint(filled_img, remaining)
-                    clean_img = Image.fromarray(cv2.cvtColor(c, cv2.COLOR_BGR2RGB))
-                    del c
-                del cv_img, mask, filled_img
+        # ---- Stage 4: Inpainter + Renderer ----
+        async def stage_inpainter_renderer():
+            sem = asyncio.Semaphore(2)
+            while True:
+                item = await translated_queue.get()
+                if item is None:  # sentinel
+                    await rendered_queue.put(None)
+                    translated_queue.task_done()
+                    break
 
-                for bubble_bbox, text, is_bubble in bubble_pairs:
+                if item.get("skip_render") or not item["translations"]:
+                    # Just save original
+                    idx = item["index"]
+                    src_data = item.get("src_data", b"")
+                    async with results_lock:
+                        rendered_results[idx] = src_data
+                    translated_queue.task_done()
+                    continue
+
+                async with sem:
+                    idx = item["index"]
+                    src_data = item["src_data"]
+                    translations = item["translations"]
+                    ocr_texts = item["ocr_texts"]
+                    groups = item["groups"]
+
                     try:
-                        clean_img = self.renderer.render_bubble_text(
-                            clean_img, bubble_bbox, text, font_type="dialogue", is_bubble=is_bubble
-                        )
+                        img = Image.open(io.BytesIO(src_data)).convert("RGB")
+                        cv_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+                        h, w = cv_img.shape[:2]
+
+                        bubble_pairs = []
+                        all_bubble_bboxes = []
+                        for g_idx, group in enumerate(groups):
+                            ru = translations[g_idx].get("ru", "").strip() if g_idx < len(translations) else ""
+                            if not ru:
+                                continue
+                            xs, ys = [], []
+                            for r in group:
+                                bb = r.get("bbox", [])
+                                if not bb:
+                                    continue
+                                if isinstance(bb[0], (list, tuple)):
+                                    xs.extend(int(p[0]) for p in bb)
+                                    ys.extend(int(p[1]) for p in bb)
+                                else:
+                                    xs.extend([bb[0], bb[2]])
+                                    ys.extend([bb[1], bb[3]])
+                            if not xs:
+                                continue
+                            text_bbox = (min(xs), min(ys), max(xs), max(ys))
+                            bubble_bbox, is_bubble = get_bubble_bounds(cv_img, text_bbox, w, h)
+                            all_bubble_bboxes.append(bubble_bbox)
+                            bubble_pairs.append((bubble_bbox, ru, is_bubble))
+
+                        if not bubble_pairs:
+                            async with results_lock:
+                                rendered_results[idx] = src_data
+                            translated_queue.task_done()
+                            continue
+
+                        filled_img, self._bg_mask = self._fill_bubble_bg(cv_img, all_bubble_bboxes)
+
+                        mask = build_mask(h, w, all_bubble_bboxes)
+                        for r in item["ocr_texts"]:
+                            poly = r.get("polygon")
+                            if poly:
+                                pts = np.array([[(p[0], p[1]) for p in poly]], dtype=np.int32)
+                                cv2.fillPoly(mask, pts, 255)
+
+                        remaining = cv2.bitwise_and(mask, cv2.bitwise_not(self._bg_mask))
+
+                        if cv2.countNonZero(remaining) == 0:
+                            clean_img = Image.fromarray(cv2.cvtColor(filled_img, cv2.COLOR_BGR2RGB))
+                        elif MODAL_AVAILABLE:
+                            _, img_bytes = cv2.imencode(".png", filled_img)
+                            modal_result = inpaint_batch_sync([img_bytes.tobytes()])
+                            if modal_result:
+                                modal_img = cv2.imdecode(np.frombuffer(modal_result[0], np.uint8), cv2.IMREAD_COLOR)
+                                clean_img = Image.fromarray(cv2.cvtColor(modal_img, cv2.COLOR_BGR2RGB))
+                                del modal_img
+                            else:
+                                c = self.inpainter.inpaint(filled_img, remaining)
+                                clean_img = Image.fromarray(cv2.cvtColor(c, cv2.COLOR_BGR2RGB))
+                                del c
+                        else:
+                            c = self.inpainter.inpaint(filled_img, remaining)
+                            clean_img = Image.fromarray(cv2.cvtColor(c, cv2.COLOR_BGR2RGB))
+                            del c
+                        del cv_img, mask, filled_img
+
+                        for bubble_bbox, text, is_bubble in bubble_pairs:
+                            try:
+                                clean_img = self.renderer.render_bubble_text(
+                                    clean_img, bubble_bbox, text, font_type="dialogue", is_bubble=is_bubble
+                                )
+                            except Exception:
+                                continue
+
+                        buf = io.BytesIO()
+                        clean_img.save(buf, format="PNG")
+                        out_data = buf.getvalue()
+                        del img, clean_img, buf
+
+                        async with results_lock:
+                            rendered_results[idx] = out_data
                     except Exception:
-                        continue
+                        async with results_lock:
+                            rendered_results[idx] = src_data
+                    translated_queue.task_done()
 
-                buf = io.BytesIO()
-                clean_img.save(buf, format="PNG")
-                out_data = buf.getvalue()
-                del img, clean_img, buf
-            except Exception:
-                out_data = src_data
+        # ---- Stage 5: Saver ----
+        async def stage_saver():
+            for i in range(total_pages):
+                # Wait for this page's result
+                while i not in rendered_results:
+                    await asyncio.sleep(0.05)
 
-            out_path = work_dir / f"page_{i:03d}.png"
-            out_path.write_bytes(out_data)
-            translated_page_paths.append(str(out_path))
+                async with results_lock:
+                    out_data = rendered_results.pop(i)
 
-            pairs_for_memory = [{"ko": t.get("ko", ""), "ru": t.get("ru", "")} for t in translations if t.get("ko") and t.get("ru")]
-            if pairs_for_memory:
-                save_translations(mangadex_manga_id, mangadex_manga_id[:8], chapter_number, pairs_for_memory)
+                out_path = work_dir / f"page_{i:03d}.png"
+                out_path.write_bytes(out_data)
+                await self._report(f"Сохранено стр. {i+1}/{total_pages}", 10 + int(80 * i / total_pages), 100)
 
-            del src_data, en_data, out_data
-            gc.collect()
+            done_event.set()
+
+        # Launch all stages
+        await self._report("Запуск конвейера...", 10, 100)
+
+        stage_tasks = [
+            asyncio.create_task(stage_downloader()),
+            asyncio.create_task(stage_preprocessor()),
+            asyncio.create_task(stage_translator()),
+            asyncio.create_task(stage_inpainter_renderer()),
+            asyncio.create_task(stage_saver()),
+        ]
+
+        # Wait for downloader to finish feeding
+        await stage_tasks[0]
+
+        # Wait for all queues to be processed
+        await raw_queue.join()
+        await ocr_queue.join()
+        await translated_queue.join()
+        await rendered_queue.join()
+
+        # Wait for saver to finish
+        await done_event.wait()
+        await stage_tasks[4]
+
+        # Collect final pages in order
+        final_paths = []
+        for i in range(total_pages):
+            path = work_dir / f"page_{i:03d}.png"
+            if path.exists():
+                final_paths.append(str(path))
 
         await self._report("Готово!", 100, 100)
-        return translated_page_paths
+        return final_paths
 
     async def close(self):
         await self.mangadex.close()
