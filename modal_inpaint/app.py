@@ -5,7 +5,7 @@ import cv2
 from pathlib import Path
 from typing import Optional
 import modal
-from modal import web_endpoint
+from modal import fastapi_endpoint
 from pydantic import BaseModel
 
 app = modal.App("manga-inpaint")
@@ -110,7 +110,7 @@ class InpaintRequest(BaseModel):
     radius: int = 10
 
 
-@web_endpoint(method="POST")
+@fastapi_endpoint(method="POST")
 def inpaint_api(request: InpaintRequest):
     result = inpaint_batch.local(request.images_b64, request.dilation, request.radius)
     return result
