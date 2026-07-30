@@ -6,7 +6,12 @@ log = logging.getLogger("manga_translator")
 
 MODAL_TOKEN_ID = os.getenv("MODAL_TOKEN_ID")
 MODAL_TOKEN_SECRET = os.getenv("MODAL_TOKEN_SECRET")
-MODAL_APP_URL = os.getenv("MODAL_APP_URL", "https://dvybornyh332--manga-inpaint-inpaint-batch.modal.run")
+MODAL_APP_ID = os.getenv("MODAL_APP_ID", "dvybornyh332/manga-inpaint")
+MODAL_APP_URL = os.getenv("MODAL_APP_URL", "")
+
+if not MODAL_APP_URL and MODAL_APP_ID and "/" in MODAL_APP_ID:
+    workspace, app_name = MODAL_APP_ID.split("/", 1)
+    MODAL_APP_URL = f"https://{workspace}--{app_name}-inpaint-api.modal.run"
 
 _MODAL_SDK_AVAILABLE = False
 try:
@@ -27,7 +32,8 @@ def inpaint_batch_sync(images: list[bytes], dilation: int = 5, radius: int = 10)
     if _MODAL_SDK_AVAILABLE:
         try:
             import modal
-            f = modal.Function.lookup("manga-inpaint", "inpaint_batch")
+            app_name = MODAL_APP_ID.split("/")[-1] if "/" in MODAL_APP_ID else "manga-inpaint"
+            f = modal.Function.lookup(app_name, "inpaint_batch")
             result_b64 = f.remote(images_b64, dilation=dilation, radius=radius)
             log.info("Modal GPU inpaint OK (%d images via SDK)", len(images))
             return [base64.b64decode(b64) for b64 in result_b64]
