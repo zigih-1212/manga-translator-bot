@@ -334,6 +334,7 @@ class TranslationPipeline:
                 page_number=i + 1,
                 manga_id=mangadex_manga_id,
                 chapter=chapter_number,
+                source_lang=source_lang,
             )
 
             await self._report(f"Обработка стр. {i + 1}/{total_pages}", progress, 100)

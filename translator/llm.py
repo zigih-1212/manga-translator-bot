@@ -181,11 +181,12 @@ class LLMTranslator:
         return glossary
 
     async def _call_openrouter(self, korean_texts, english_texts, page_number, model, timeout=120.0) -> list[dict] | None:
-        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary)
+        sl = getattr(self, '_source_lang', 'ko')
+        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary, source_lang=sl)
         payload = {
             "model": model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": _system_prompt(sl)},
                 {"role": "user", "content": prompt},
             ],
             "temperature": self.temperature,
@@ -223,11 +224,12 @@ class LLMTranslator:
         return await self._call_openrouter(korean_texts, english_texts, page_number, self.model)
 
     async def _call_groq(self, korean_texts, english_texts, page_number) -> list[dict] | None:
-        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary)
+        sl = getattr(self, '_source_lang', 'ko')
+        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary, source_lang=sl)
         payload = {
             "model": "llama-3.3-70b-versatile",
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": _system_prompt(sl)},
                 {"role": "user", "content": prompt},
             ],
             "temperature": self.temperature,
@@ -253,7 +255,8 @@ class LLMTranslator:
             return None
 
     async def _call_gemini(self, korean_texts, english_texts, page_number) -> list[dict] | None:
-        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary)
+        sl = getattr(self, '_source_lang', 'ko')
+        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary, source_lang=sl)
         payload = {
             "contents": [
                 {
@@ -262,7 +265,7 @@ class LLMTranslator:
                 }
             ],
             "systemInstruction": {
-                "parts": [{"text": SYSTEM_PROMPT}],
+                "parts": [{"text": _system_prompt(sl)}],
             },
             "generationConfig": {
                 "temperature": self.temperature,
@@ -314,7 +317,9 @@ class LLMTranslator:
     async def _call_fallback(self, korean_texts, english_texts=None, page_number=0) -> list[dict]:
         try:
             from deep_translator import GoogleTranslator
-            translator = GoogleTranslator(source="ko", target="ru")
+            sl = getattr(self, '_source_lang', 'ko')
+            deepl_src = {"ko": "ko", "en": "en", "ja": "ja", "zh": "zh-CN"}.get(sl, "ko")
+            translator = GoogleTranslator(source=deepl_src, target="ru")
         except ImportError:
             print("[LLM] deep-translator not installed, returning originals")
             return [{"id": i + 1, "ru": text} for i, text in enumerate(korean_texts)]
@@ -327,9 +332,10 @@ class LLMTranslator:
                 results.append({"id": i + 1, "ru": text})
         return results
 
-    async def translate_page(self, korean_texts, english_texts=None, page_number=1, manga_id=None, chapter=None) -> list[dict]:
+    async def translate_page(self, korean_texts, english_texts=None, page_number=1, manga_id=None, chapter=None, source_lang="ko") -> list[dict]:
         if not korean_texts:
             return []
+        self._source_lang = source_lang
 
         self._memory_context = get_memory_context(manga_id) if manga_id else ""
         self._memory_glossary = get_memory_glossary(manga_id) if manga_id else {}
