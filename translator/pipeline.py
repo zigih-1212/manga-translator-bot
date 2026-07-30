@@ -13,6 +13,7 @@ from translator.colab_client import ColabClient
 from translator.inpainter import LaMaInpainter
 from translator.bubbles import get_bubble_bounds, build_mask
 from translator.modal_client import inpaint_batch_sync, MODAL_AVAILABLE
+from translator.upscaler import RealESRGANUpscaler
 from cfg import TEMP_DIR
 
 from cfg.memory import save_translations
@@ -25,6 +26,9 @@ def _filter_text_regions(ocr_texts: list[dict], img_w: int, img_h: int) -> list[
         if not bb:
             continue
         text = r.get("text", "")
+        conf = r.get("confidence", 1.0)
+        if conf < 0.5:
+            continue
         if isinstance(bb[0], (list, tuple)):
             xs = [p[0] for p in bb]
             ys = [p[1] for p in bb]
@@ -138,6 +142,7 @@ class TranslationPipeline:
         self.inpainter = LaMaInpainter()
         self.progress_callback = None
         self._bg_mask = None
+        self._upscaler = RealESRGANUpscaler()
 
     def on_progress(self, callback):
         self.progress_callback = callback
@@ -231,6 +236,15 @@ class TranslationPipeline:
             )
             try:
                 src_data = await self.mangadex.download_page(src_pages[i])
+            if self._upscaler.available:
+                try:
+                    np_img = np.frombuffer(src_data, np.uint8)
+                    cv_img_up = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+                    cv_img_up = self._upscaler.upscale(cv_img_up)
+                    _, src_data = cv2.imencode(".png", cv_img_up)
+                    src_data = src_data.tobytes()
+                except Exception:
+                    pass
             except Exception as e:
                 await self._report(f"Ошибка скачивания стр. {i+1}: {e}", progress, 100)
                 continue

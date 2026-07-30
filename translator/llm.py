@@ -333,6 +333,7 @@ class LLMTranslator:
                 for i, ko in enumerate(korean_texts):
                     if i < len(result):
                         result[i]["ko"] = ko
+                result = self._apply_post_replace(result)
                 return result
             except Exception as e:
                 print(f"  [LLM] {name} → error: {e}")
@@ -354,6 +355,19 @@ class LLMTranslator:
             except Exception:
                 continue
         return korean_sfx
+
+    def _apply_post_replace(self, result: list[dict]) -> list[dict]:
+        glossary = CONFIG.get("translation", {}).get("post_replace", {})
+        if not glossary or not result:
+            return result
+        for entry in result:
+            ru = entry.get("ru", "")
+            if not ru:
+                continue
+            for ko, ru_replacement in glossary.items():
+                ru = ru.replace(ko, ru_replacement)
+            entry["ru"] = ru
+        return result
 
     async def close(self):
         if self.colab_client:

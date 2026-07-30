@@ -30,7 +30,7 @@ DEFAULT_CONFIG = {
     "mangadex": {"base_url": "https://api.mangadex.org", "image_url": "https://uploads.mangadex.org"},
     "llm": {"provider": "colab", "model": "google/gemini-2.0-flash-lite", "fallback_provider": "deep-translator", "max_context_tokens": 32000, "temperature": 0.3},
     "fonts": {"dialogue": "fonts/anime/Anime Font.ttf", "sfx": "fonts/bring_me_a_helicopter/Bring Me A Helicopter!.otf", "narration": "fonts/wister_lilya/Wister Lilya.otf"},
-    "translation": {"sfx_mode": "english_reference", "auto_publish": False, "max_pages_per_batch": 20},
+    "translation": {"sfx_mode": "english_reference", "auto_publish": False, "max_pages_per_batch": 20, "post_replace": {}},
     "titles": [],
     "telegram": {},
     "chapters": {},
