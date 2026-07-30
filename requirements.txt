@@ -10,3 +10,4 @@ opencv-python-headless>=4.9.0
 aiohttp-socks>=0.8.0
 paddleocr>=2.7.0
 onnxruntime>=1.17.0
+modal>=0.60.0  # GPU inpainting (graceful fallback if missing)

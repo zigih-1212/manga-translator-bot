@@ -3,7 +3,9 @@ import base64
 import numpy as np
 import cv2
 from pathlib import Path
+from typing import Optional
 import modal
+from pydantic import BaseModel
 
 app = modal.App("manga-inpaint")
 
@@ -15,6 +17,7 @@ image = (
         "numpy>=1.24.0",
         "Pillow>=10.0.0",
         "onnxruntime>=1.17.0",
+        "pydantic>=2.0.0",
     )
     .run_commands(
         "mkdir -p /models",
@@ -98,3 +101,15 @@ def test():
     b64 = base64.b64encode(buf).decode()
     result = inpaint_batch.remote([b64])
     print(f"OK: {len(result)} images, {len(result[0])} bytes")
+
+
+class InpaintRequest(BaseModel):
+    images_b64: list[str]
+    dilation: int = 5
+    radius: int = 10
+
+
+@app.web_endpoint(method="POST", image=image)
+def inpaint_api(request: InpaintRequest):
+    result = inpaint_batch.local(request.images_b64, request.dilation, request.radius)
+    return result
