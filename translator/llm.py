@@ -55,7 +55,7 @@ def _build_prompt(korean_texts, english_texts, page_number, context, glossary, m
         parts.append("STORY SO FAR (Korean texts from previous pages for context):\n" + "\n".join(context[-5:]))
     parts.append(f"=== PAGE {page_number} ===")
     if memory_glossary:
-        lines = ["Known terms (Korean -> Russian) from previous chapters:"]
+        lines = ["Known terms (Korean -> Russian) from previous chapters — MUST USE these translations:"]
         for ko, ru in memory_glossary.items():
             lines.append(f"  {ko} → {ru}")
         parts.append("\n".join(lines))
@@ -64,11 +64,16 @@ def _build_prompt(korean_texts, english_texts, page_number, context, glossary, m
         terms = glossary.get("terms", {})
         lines = []
         if chars:
-            lines.append("Characters: " + json.dumps(chars, ensure_ascii=False))
+            lines.append("Characters (always use these names):")
+            for ko, ru in chars.items():
+                lines.append(f"  {ko} → {ru}")
         if terms:
-            lines.append("Terms: " + json.dumps(terms, ensure_ascii=False))
+            lines.append("Terms (always use these translations):")
+            for ko, ru in terms.items():
+                lines.append(f"  {ko} → {ru}")
         if lines:
             parts.append("GLOSSARY:\n" + "\n".join(lines))
+            parts.append("RULE: If a Korean term appears in GLOSSARY above, you MUST use the listed Russian translation. Do NOT translate it differently.")
     if english_texts:
         en_block = "\n".join(f"[{i+1}] {t}" for i, t in enumerate(english_texts))
         parts.append("ENGLISH REFERENCE (for context):\n" + en_block)
