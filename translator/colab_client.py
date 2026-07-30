@@ -2,9 +2,12 @@ import json
 import os
 import io
 import asyncio
+import logging
+import cv2
 import numpy as np
 from PIL import Image
 import httpx
+from .log import log
 
 
 def _get_proxy():
@@ -40,9 +43,9 @@ class ColabClient:
             loop = asyncio.get_event_loop()
             self._paddle_instances["korean"] = await loop.run_in_executor(None, self._init_paddle, "korean")
             self._paddle_available = True
-            print("[OCR] PaddleOCR (korean) on CPU")
+            log.info("PaddleOCR (korean) on CPU")
         except Exception as e:
-            print(f"[OCR] PaddleOCR not available: {e}, fallback to ocr.space")
+            log.warning("PaddleOCR not available: %s, fallback to ocr.space", e)
 
     @staticmethod
     def _init_paddle(lang: str):
@@ -53,9 +56,9 @@ class ColabClient:
         if lang not in self._paddle_instances:
             try:
                 self._paddle_instances[lang] = self._init_paddle(lang)
-                print(f"[OCR] PaddleOCR ({lang}) initialized")
+                log.info("PaddleOCR (%s) initialized", lang)
             except Exception as e:
-                print(f"[OCR] PaddleOCR ({lang}) failed: {e}")
+                log.error("PaddleOCR (%s) failed: %s", lang, e)
                 return self._paddle_instances.get("korean")
         return self._paddle_instances[lang]
 
@@ -68,6 +71,16 @@ class ColabClient:
             paddle_lang = PADDLE_LANG_MAP.get(lang, "korean")
             return await self._ocr_paddle(pages, paddle_lang)
         return await self._ocr_space(pages, lang)
+
+    @staticmethod
+    def _preprocess_for_ocr(img_np: np.ndarray) -> np.ndarray:
+        gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY) if img_np.ndim == 3 else img_np
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        denoised = cv2.fastNlMeansDenoising(enhanced, h=10, templateWindowSize=7, searchWindowSize=21)
+        sharpen_kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
+        sharpened = cv2.filter2D(denoised, -1, sharpen_kernel)
+        return cv2.cvtColor(sharpened, cv2.COLOR_GRAY2RGB)
 
     async def _ocr_paddle(self, pages: list[bytes], lang: str = "korean") -> list[list[dict]]:
         paddle = self._get_paddle(lang)
@@ -82,8 +95,9 @@ class ColabClient:
                 scale = 2
                 img_big = img.resize((ow * scale, oh * scale), Image.LANCZOS)
                 img_np = np.array(img_big)
+                img_np = self._preprocess_for_ocr(img_np)
                 result = await loop.run_in_executor(
-                    None, lambda: paddle.ocr(img_np, cls=False)
+                    None, lambda p=img_np: paddle.ocr(p, cls=False)
                 )
                 results = []
                 if result and result[0]:
@@ -105,7 +119,7 @@ class ColabClient:
                         })
                 all_results.append(results)
             except Exception as e:
-                print(f"[OCR] Paddle error: {e}")
+                log.error("Paddle error: %s", e)
                 all_results.append([])
         return all_results
 
@@ -130,7 +144,7 @@ class ColabClient:
                 data = resp.json()
 
                 if data.get("IsErroredOnProcessing"):
-                    print(f"[OCR] Error: {data.get('ErrorMessage', '')}")
+                    log.error("OCR Error: %s", data.get('ErrorMessage', ''))
                     all_results.append([])
                     continue
 
@@ -159,7 +173,7 @@ class ColabClient:
                         })
                 all_results.append(results)
             except Exception as e:
-                print(f"[OCR] Request failed: {e}")
+                log.error("OCR Request failed: %s", e)
                 all_results.append([])
         return all_results
 

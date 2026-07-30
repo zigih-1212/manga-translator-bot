@@ -1,10 +1,36 @@
 import asyncio
 import json
 import os
+import hashlib
+import logging
 import httpx
 from cfg import GLOSSARY, CONFIG, COLAB_URL, OPENROUTER_API_KEY, GROQ_API_KEY, GEMINI_API_KEY
 
 from cfg.memory import get_context as get_memory_context, get_glossary as get_memory_glossary
+from .log import log
+
+
+class TranslationCache:
+    _cache: dict[str, list[dict]] = {}
+    _max_size = 500
+
+    @classmethod
+    def _key(cls, texts: list[str], source_lang: str) -> str:
+        raw = json.dumps(texts, sort_keys=True, ensure_ascii=False) + f"|{source_lang}"
+        return hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def get(cls, texts: list[str], source_lang: str) -> list[dict] | None:
+        k = cls._key(texts, source_lang)
+        return cls._cache.get(k)
+
+    @classmethod
+    def put(cls, texts: list[str], source_lang: str, result: list[dict]):
+        k = cls._key(texts, source_lang)
+        if len(cls._cache) >= cls._max_size:
+            oldest = next(iter(cls._cache))
+            del cls._cache[oldest]
+        cls._cache[k] = result
 def _get_proxy():
     return (
         os.environ.get("HTTP_PROXY")
@@ -141,11 +167,11 @@ class LLMTranslator:
             if resp.status_code == 200:
                 self.colab_available = True
                 self.colab_client = _make_client(60.0)
-                print(f"[LLM] Colab OK — {self.colab_url}")
+                log.info("Colab OK — %s", self.colab_url)
             else:
-                print(f"[LLM] Colab health check returned {resp.status_code}, skipping")
+                log.warning("Colab health check returned %d, skipping", resp.status_code)
         except Exception:
-            print("[LLM] Colab unreachable, skipping")
+            log.warning("Colab unreachable, skipping")
 
     def _init_providers(self):
         if GEMINI_API_KEY:
@@ -162,7 +188,7 @@ class LLMTranslator:
 
     def _print_chain(self):
         names = [p[0] for p in self._providers]
-        print(f"[LLM] Chain: {' -> '.join(names)}")
+        log.info("Chain: %s", " -> ".join(names))
 
     def clear_context(self):
         self.context_pages.clear()
@@ -281,7 +307,7 @@ class LLMTranslator:
             if resp.status_code == 429:
                 return None
             if resp.status_code == 403:
-                print("  [LLM] Gemini → 403 (quota/blocked), skipping")
+                log.warning("Gemini → 403 (quota/blocked), skipping")
                 return None
             resp.raise_for_status()
             data = resp.json()
@@ -321,7 +347,7 @@ class LLMTranslator:
             deepl_src = {"ko": "ko", "en": "en", "ja": "ja", "zh": "zh-CN"}.get(sl, "ko")
             translator = GoogleTranslator(source=deepl_src, target="ru")
         except ImportError:
-            print("[LLM] deep-translator not installed, returning originals")
+            log.warning("deep-translator not installed, returning originals")
             return [{"id": i + 1, "ru": text} for i, text in enumerate(korean_texts)]
         results = []
         for i, text in enumerate(korean_texts):
@@ -340,23 +366,30 @@ class LLMTranslator:
         self._memory_context = get_memory_context(manga_id) if manga_id else ""
         self._memory_glossary = get_memory_glossary(manga_id) if manga_id else {}
 
+        cached = TranslationCache.get(korean_texts, source_lang)
+        if cached is not None:
+            log.debug("Cache HIT for %d bubbles", len(korean_texts))
+            self.add_context(korean_texts)
+            return cached
+
         for name, call_fn in self._providers:
             try:
                 result = await call_fn(korean_texts, english_texts or [], page_number)
                 if result is None:
-                    print(f"  [LLM] {name} → rate limited, next...")
+                    log.warning("%s → rate limited, next...", name)
                     continue
                 self.add_context(korean_texts)
                 for i, ko in enumerate(korean_texts):
                     if i < len(result):
                         result[i]["ko"] = ko
                 result = self._apply_post_replace(result)
+                TranslationCache.put(korean_texts, source_lang, result)
                 return result
             except Exception as e:
-                print(f"  [LLM] {name} → error: {e}")
+                log.error("%s → error: %s", name, e)
                 continue
 
-        print(f"  [LLM] All providers failed, returning originals")
+        log.error("All providers failed, returning originals")
         return [{"id": i + 1, "ko": t, "ru": t} for i, t in enumerate(korean_texts)]
 
     async def translate_sfx(self, korean_sfx, english_sfx="") -> str:

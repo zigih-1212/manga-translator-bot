@@ -2,7 +2,10 @@ import asyncio
 import aiohttp
 import httpx
 import os
+import logging
 from .base import BaseSource, MangaResult, Chapter, Page
+
+log = logging.getLogger("manga_translator")
 
 
 def _get_proxy():
@@ -54,13 +57,13 @@ class MangaDexSource(BaseSource):
                         async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                             if resp.status == 429:
                                 wait = 2 ** (attempt + 1)
-                                print(f"[MangaDex] 429, жду {wait}с...")
+                                log.warning("MangaDex 429, жду %dс...", wait)
                                 await asyncio.sleep(wait)
                                 continue
                             resp.raise_for_status()
                             return await resp.json()
                 except (aiohttp.ClientError, TimeoutError, asyncio.TimeoutError) as e:
-                    print(f"[MangaDex] попытка {attempt+1}/{self.MAX_RETRIES} ошибка: {e}")
+                    log.warning("MangaDex попытка %d/%d ошибка: %s", attempt+1, self.MAX_RETRIES, e)
                     if attempt == self.MAX_RETRIES - 1:
                         raise
                     await asyncio.sleep(2 ** attempt)
@@ -75,7 +78,7 @@ class MangaDexSource(BaseSource):
                 r.raise_for_status()
                 return r.json()
         except Exception as e:
-            print(f"[MangaDex proxy] Error: {e}")
+            log.error("MangaDex proxy Error: %s", e)
             return {}
 
     async def _proxy_download(self, url: str) -> bytes:
@@ -88,7 +91,7 @@ class MangaDexSource(BaseSource):
                 import base64
                 return base64.b64decode(r.json()["image_b64"])
         except Exception as e:
-            print(f"[MangaDex proxy download] Error: {e}")
+            log.error("MangaDex proxy download Error: %s", e)
             return b""
 
     async def search(self, title: str) -> list[MangaResult]:

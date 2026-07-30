@@ -1,8 +1,11 @@
 import io
 import os
+import logging
 import numpy as np
 import cv2
 from pathlib import Path
+
+log = logging.getLogger("manga_translator")
 
 MODEL_URL = "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.onnx"
 MODEL_DIR = Path(__file__).resolve().parent.parent / "models"
@@ -15,12 +18,12 @@ def _ensure_model():
         return True
     try:
         import urllib.request
-        print("[ESRGAN] Downloading model...")
+        log.info("Downloading model...")
         urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
-        print("[ESRGAN] Downloaded OK")
+        log.info("Downloaded OK")
         return True
     except Exception as e:
-        print(f"[ESRGAN] Download failed: {e}")
+        log.error("Download failed: %s", e)
         return False
 
 
@@ -39,9 +42,9 @@ class RealESRGANUpscaler:
                 str(MODEL_PATH), providers=["CPUExecutionProvider"]
             )
             self.available = True
-            print("[ESRGAN] Model loaded on CPU")
+            log.info("ESRGAN Model loaded on CPU")
         except Exception as e:
-            print(f"[ESRGAN] Failed: {e}")
+            log.error("ESRGAN Failed: %s", e)
             self.available = False
 
     def upscale(self, img: np.ndarray, scale: int = 2) -> np.ndarray:

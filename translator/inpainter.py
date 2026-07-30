@@ -1,9 +1,12 @@
 import os
 import threading
 import urllib.request
+import logging
 from pathlib import Path
 import numpy as np
 import cv2
+
+log = logging.getLogger("manga_translator")
 
 MODEL_DIR = Path(__file__).resolve().parent.parent / "models"
 MODEL_URLS = [
@@ -28,16 +31,16 @@ class LaMaInpainter:
     def _download_async(self):
         for url in MODEL_URLS:
             try:
-                print(f"[LaMa] Downloading {url}...")
+                log.info("Downloading %s...", url)
                 req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
                 with urllib.request.urlopen(req, timeout=300) as src:
                     with open(MODEL_PATH, "wb") as dst:
                         dst.write(src.read())
-                print("[LaMa] Downloaded OK")
+                log.info("Downloaded OK")
                 self._load_model()
                 return
             except Exception as e:
-                print(f"[LaMa] Download failed: {e}")
+                log.warning("Download failed: %s", e)
                 if MODEL_PATH.exists():
                     MODEL_PATH.unlink()
 
@@ -48,9 +51,9 @@ class LaMaInpainter:
                 str(MODEL_PATH), providers=["CPUExecutionProvider"]
             )
             self._available = True
-            print("[LaMa] ONNX model loaded on CPU")
+            log.info("ONNX model loaded on CPU")
         except Exception as e:
-            print(f"[LaMa] Failed to load: {e}")
+            log.error("Failed to load LaMa: %s", e)
 
     @property
     def available(self) -> bool:
