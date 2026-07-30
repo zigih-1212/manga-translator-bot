@@ -265,7 +265,7 @@ class TranslationPipeline:
                 src_data = await self.mangadex.download_page(src_pages[i])
                 src_data = self._auto_rotate(src_data)
                 if self._upscaler.available:
-                try:
+                    try:
                     np_img = np.frombuffer(src_data, np.uint8)
                     cv_img_up = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
                     cv_img_up = self._upscaler.upscale(cv_img_up)
