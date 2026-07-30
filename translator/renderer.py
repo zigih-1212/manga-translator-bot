@@ -183,6 +183,19 @@ class TextRenderer:
 
     def _wrap_text(self, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
         words = text.split()
+        if not words:
+            return []
+        lines = self._smart_break(text, font, max_width)
+        if len(lines) > 1:
+            balanced = self._balance_lines(lines, font, max_width)
+            if balanced:
+                return balanced
+        return lines
+
+    @staticmethod
+    def _smart_break(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
+        import re
+        words = text.split()
         lines = []
         current = ""
         for word in words:
@@ -209,6 +222,21 @@ class TextRenderer:
         if current:
             lines.append(current)
         return lines
+
+    @staticmethod
+    def _balance_lines(lines: list[str], font: ImageFont.FreeTypeFont, max_width: int) -> list[str] | None:
+        if len(lines) < 2:
+            return None
+        last_w = font.getbbox(lines[-1])[2] - font.getbbox(lines[-1])[0]
+        if last_w > max_width * 0.3:
+            return None
+        for i in range(len(lines) - 1):
+            merged = f"{lines[i]} {lines[i+1]}"
+            mw = font.getbbox(merged)[2] - font.getbbox(merged)[0]
+            if mw <= max_width:
+                new_lines = lines[:i] + [merged] + lines[i+2:]
+                return new_lines
+        return None
 
     @staticmethod
     def _estimate_brightness(img: Image.Image, bbox: tuple) -> float:

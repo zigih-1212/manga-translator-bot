@@ -10,7 +10,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.types import FSInputFile
-from cfg import TG_BOT_TOKEN, TG_PROXY_URL, COLAB_URL, CONFIG, save_config
+from cfg import TG_BOT_TOKEN, TG_PROXY_URL, COLAB_URL, CONFIG, save_config, validate_config
 from bot.handlers import start_router, titles_router, translate_router, status_router, manga_info_router
 from sources.mangadex import MangaDexSource
 from translator.pipeline import TranslationPipeline
@@ -237,6 +237,7 @@ async def main():
     dp.include_router(manga_info_router)
 
     logger.info("Bot starting...")
+    validate_config()
     asyncio.create_task(_keepalive())
     asyncio.create_task(scheduler_loop(bot))
     asyncio.create_task(startup_translate(bot))

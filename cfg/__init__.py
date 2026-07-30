@@ -58,3 +58,29 @@ def save_config():
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(CONFIG, f, ensure_ascii=False, indent=2)
+
+
+_REQUIRED_CONFIG_KEYS = {
+    "mangadex": ["base_url"],
+    "llm": ["provider", "model"],
+}
+
+
+def validate_config():
+    import logging
+    log = logging.getLogger("manga_translator")
+    issues = []
+    if not TG_BOT_TOKEN:
+        issues.append("TG_BOT_TOKEN не установлен — бот не запустится")
+    if not GEMINI_API_KEY and not GROQ_API_KEY and not OPENROUTER_API_KEY:
+        issues.append("Нет ни одного API ключа (GEMINI/GROQ/OPENROUTER) — перевод не будет работать")
+    for section, keys in _REQUIRED_CONFIG_KEYS.items():
+        cfg_section = CONFIG.get(section, {})
+        for key in keys:
+            if not cfg_section.get(key):
+                issues.append(f"CONFIG.{section}.{key} отсутствует")
+    for issue in issues:
+        log.warning("Config issue: %s", issue)
+    if not issues:
+        log.info("Config validation OK")
+    return len(issues) == 0
