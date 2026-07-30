@@ -266,13 +266,13 @@ class TranslationPipeline:
                 src_data = self._auto_rotate(src_data)
                 if self._upscaler.available:
                     try:
-                    np_img = np.frombuffer(src_data, np.uint8)
-                    cv_img_up = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
-                    cv_img_up = self._upscaler.upscale(cv_img_up)
-                    _, src_data = cv2.imencode(".png", cv_img_up)
-                    src_data = src_data.tobytes()
-                except Exception:
-                    pass
+                        np_img = np.frombuffer(src_data, np.uint8)
+                        cv_img_up = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+                        cv_img_up = self._upscaler.upscale(cv_img_up)
+                        _, src_data = cv2.imencode(".png", cv_img_up)
+                        src_data = src_data.tobytes()
+                    except Exception:
+                        pass
             except Exception as e:
                 await self._report(f"Ошибка скачивания стр. {i+1}: {e}", progress, 100)
                 continue
