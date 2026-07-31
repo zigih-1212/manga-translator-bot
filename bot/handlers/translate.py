@@ -11,9 +11,13 @@ from PIL import Image
 import zipfile
 from cfg import CONFIG, save_config
 from translator.pipeline import TranslationPipeline
+from cfg.db import TranslationQueueDB
+from sources.mangadex import MangaDexSource
 
 router = Router()
 active_tasks: dict[int, asyncio.Task] = {}
+
+db = TranslationQueueDB()
 
 
 class TranslateStates(StatesGroup):
@@ -60,18 +64,18 @@ async def process_chapter(message: Message, state: FSMContext):
     data = await state.get_data()
     title = data["title"]
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"Начать перевод главы {chapter_num}", callback_data="tr_start")],
-        [InlineKeyboardButton(text="Отмена", callback_data="tr_cancel")],
-    ])
-    await message.answer(
-        f"Тайтл: {title['name']}\n"
-        f"Глава: {chapter_num}\n"
-        f"Язык оригинала: {title.get('source_lang', 'ko')}\n\n"
-        f"Начать?",
-        reply_markup=kb,
-    )
-    await state.update_data(chapter_number=chapter_num)
+    manga_id = title["mangadex_id"]
+    source_lang = title.get("source_lang", "ko")
+
+    if db.add_to_queue(manga_id, chapter_num, source_lang):
+        await message.answer(
+            f"Глава {chapter_num} для тайтла {title['name']} добавлена в очередь перевода."
+        )
+    else:
+        await message.answer(
+            f"Глава {chapter_num} для тайтла {title['name']} уже в очереди или переводится."
+        )
+    await state.clear()
 
 
 @router.callback_query(lambda c: c.data == "tr_cancel")
@@ -82,86 +86,78 @@ async def cancel_translate(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(lambda c: c.data == "tr_start")
-async def start_translate(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    title = data["title"]
-    chapter_number = data["chapter_number"]
-    user_id = callback.from_user.id
+async def start_translate_now(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer("Перевод будет запущен автоматически из очереди.")
     await callback.answer()
-
-    if user_id in active_tasks and not active_tasks[user_id].done():
-        await callback.message.answer("Уже идёт перевод. Дождись.")
-        return
-
     await state.clear()
 
-    progress_msg = await callback.message.answer("Подготовка...")
 
-    pipeline = TranslationPipeline()
-    source_lang = title.get("source_lang", "ko")
+# Новый обработчик для команды /translate_all
+@router.message(Command("translate_all"))
+async def cmd_translate_all(message: Message, state: FSMContext):
+    titles = CONFIG.get("titles", [])
+    if not titles:
+        await message.answer("Нет тайтлов. Сначала /add_title")
+        return
 
-    async def update_progress(msg: str, current: int, total: int):
-        bar_len = 20
-        filled = int(bar_len * current / total) if total else 0
-        bar = "█" * filled + "░" * (bar_len - filled)
-        try:
-            await progress_msg.edit_text(
-                f"Перевод: {title['name']} — стр. {chapter_number}\n\n"
-                f"{bar} {current}%\n\n{msg}"
-            )
-        except Exception:
-            pass
+    added_count = 0
+    for title_entry in titles:
+        manga_id = title_entry["mangadex_id"]
+        source_lang = title_entry.get("source_lang", "ko")
 
-    pipeline.on_progress(update_progress)
+        mangadex_source = MangaDexSource()
+        chapters = await mangadex_source.get_chapters(manga_id, source_lang)
+        await mangadex_source.close()
 
-    async def run_translation():
-        try:
-            page_paths = await pipeline.process_chapter(
-                mangadex_manga_id=title["mangadex_id"],
-                chapter_number=chapter_number,
-                source_lang=source_lang,
-                target_lang="en",
-            )
+        for chapter in chapters:
+            if db.add_to_queue(manga_id, chapter.number, source_lang):
+                added_count += 1
+    
+    await message.answer(f"Добавлено {added_count} глав в очередь перевода.")
+    await state.clear()
 
-            if not page_paths:
-                await progress_msg.edit_text("Не удалось перевести главу.")
-                return
 
-            await progress_msg.edit_text(
-                f"Собираю ZIP ({len(page_paths)} стр.)..."
-            )
+# Добавляем команду /queue_status для отображения очереди
+@router.message(Command("queue_status"))
+async def cmd_queue_status(message: Message):
+    tasks = db.get_all_tasks()
+    if not tasks:
+        await message.answer("Очередь перевода пуста.")
+        return
 
-            zip_path = Path("temp") / f"chapter_{chapter_number}.zip"
-            zip_path.parent.mkdir(parents=True, exist_ok=True)
-            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                for p in page_paths:
-                    zf.write(p, arcname=Path(p).name)
+    pending = [t for t in tasks if t["status"] == "pending"]
+    processing = [t for t in tasks if t["status"] == "processing"]
+    completed = [t for t in tasks if t["status"] == "completed"]
+    failed = [t for t in tasks if t["status"] == "failed"]
 
-            total_pages = len(page_paths)
+    response_text = "<b>Статус очереди перевода:</b>\n\n"
 
-            await callback.message.answer_document(
-                document=FSInputFile(str(zip_path)),
-                caption=(
-                    f"{title['name']} — глава {chapter_number}\n"
-                    f"Страниц: {total_pages}\n"
-                    f"Язык: {source_lang} -> ru"
-                ),
-            )
+    titles = CONFIG.get("titles", [])
+    title_name = titles[0]["name"] if titles else "Манга"
 
-            zip_path.unlink(missing_ok=True)
+    if processing:
+        response_text += "<b>В работе:</b>\n"
+        for t in processing:
+            response_text += f"- {title_name} - гл. {t['chapter_number']} ({t['source_lang']}->ru)\n"
+        response_text += "\n"
 
-            await progress_msg.edit_text(
-                f"Готово!\n"
-                f"Тайтл: {title['name']}\n"
-                f"Глава: {chapter_number}\n"
-                f"Страниц: {total_pages}"
-            )
+    if pending:
+        response_text += "<b>Ожидают:</b>\n"
+        for t in pending:
+            response_text += f"- {title_name} - гл. {t['chapter_number']} ({t['source_lang']}->ru)\n"
+        response_text += "\n"
+    
+    if failed:
+        response_text += "<b>Ошибки:</b>\n"
+        for t in failed:
+            response_text += f"- {title_name} - гл. {t['chapter_number']} ({t['source_lang']}->ru) | Ошибка: {t['error_message']}\n"
+        response_text += "\n"
 
-        except Exception as e:
-            await progress_msg.edit_text(f"Ошибка: {e}")
-        finally:
-            active_tasks.pop(user_id, None)
-            await pipeline.close()
+    response_text += f"Всего задач: {len(tasks)} (Выполнено: {len(completed)}, Ожидают: {len(pending)}, В работе: {len(processing)}, Ошибки: {len(failed)})\n"
 
-    task = asyncio.create_task(run_translation())
-    active_tasks[user_id] = task
+    await message.answer(response_text, parse_mode="HTML")
+
+
+@router.shutdown()
+async def shutdown_handler():
+    db.close()

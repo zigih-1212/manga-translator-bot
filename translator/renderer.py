@@ -5,6 +5,7 @@ import re
 import os
 import platform
 import numpy as np
+import cv2
 from cfg import FONTS, FONTS_PATH
 
 
@@ -105,6 +106,81 @@ def _extract_text_color(
     text_color = centers[text_cluster].astype(np.uint8)
 
     return tuple(int(c) for c in text_color)
+
+
+def _classify_font_style(
+    original_img: Image.Image,
+    bubble_mask: Image.Image,
+    bbox: tuple[int, int, int, int],
+) -> str:
+    """
+    Classify text region style for font matching.
+    Returns "narration" (handwritten/italic) or "dialogue" (clean/print).
+    Uses edge roughness & line straightness of the text mask inside the bubble.
+    """
+    x1, y1, x2, y2 = bbox
+    bw, bh = x2 - x1, y2 - y1
+    if bw <= 0 or bh <= 0:
+        return "dialogue"
+
+    try:
+        mask_crop = np.array(bubble_mask.crop((x1, y1, x2, y2)).convert("L"), dtype=np.uint8)
+    except Exception:
+        return "dialogue"
+
+    binary = (mask_crop > 128).astype(np.uint8)
+    if binary.sum() < 50:
+        return "dialogue"
+
+    # Edge roughness: ratio of perimeter to area. Handwritten text has ragged edges.
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not contours:
+        return "dialogue"
+    total_perim = sum(cv2.arcLength(c, True) for c in contours)
+    total_area = float(binary.sum())
+    if total_area <= 0:
+        return "dialogue"
+    roughness = total_perim / total_area
+
+    # Aspect: handwritten is often narrow/tall strokes; captions are wide & flat
+    xs, ys = np.nonzero(binary)
+    h_span = int(xs.max() - xs.min()) + 1
+    w_span = int(ys.max() - ys.min()) + 1
+    aspect = (w_span / max(h_span, 1)) if h_span > 0 else 1.0
+
+    # Handwritten/italic text: higher roughness + moderate aspect
+    if roughness > 0.35 and aspect < 4.5:
+        return "narration"
+    return "dialogue"
+
+
+def _is_caption_region(
+    cv_img: np.ndarray,
+    text_bbox: tuple[int, int, int, int],
+) -> bool:
+    """
+    Detect narration captions: text in a rectangular box without a round bubble.
+    Returns True for rectangular captions (narration), False for speech bubbles.
+    """
+    from translator.bubbles import _find_bubble_contour
+    bubble = _find_bubble_contour(cv_img, text_bbox)
+    if bubble:
+        # It's a bubble — but could still be a rounded rectangle caption.
+        bx1, by1, bx2, by2 = bubble
+        bw = bx2 - bx1
+        bh = by2 - by1
+        if bw <= 0 or bh <= 0:
+            return False
+        rect_area = bw * bh
+        # Rounded-rectangle captions are fairly rectangular
+        return rect_area > 0 and (bw / max(bh, 1)) > 1.6
+    # No bubble contour: if text is wide & flat, treat as narration caption
+    tx1, ty1, tx2, ty2 = text_bbox
+    tw = tx2 - tx1
+    th = ty2 - ty1
+    if tw > 0 and th > 0 and tw / max(th, 1) > 1.8:
+        return True
+    return False
 
 
 FONT_CATEGORIES = {

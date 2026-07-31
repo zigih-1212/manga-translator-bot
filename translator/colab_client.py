@@ -35,41 +35,28 @@ class ColabClient:
         proxy = _get_proxy()
         self.client = httpx.AsyncClient(timeout=120.0, proxy=proxy, verify=False) if proxy else httpx.AsyncClient(timeout=120.0)
         self._connected = True
-        self._paddle_instances: dict[str, any] = {}
-        self._paddle_available = False
+        self._paddle_available = False # PaddleOCR отключен для экономии RAM
 
     async def init(self):
-        try:
-            loop = asyncio.get_event_loop()
-            self._paddle_instances["korean"] = await loop.run_in_executor(None, self._init_paddle, "korean")
-            self._paddle_available = True
-            log.info("PaddleOCR (korean) on CPU")
-        except Exception as e:
-            log.warning("PaddleOCR not available: %s, fallback to ocr.space", e)
+        # Инициализация PaddleOCR отключена
+        log.info("PaddleOCR отключен, используем ocr.space")
 
     @staticmethod
     def _init_paddle(lang: str):
-        from paddleocr import PaddleOCR
-        return PaddleOCR(lang=lang, use_angle_cls=False, use_gpu=False, show_log=False)
+        # Функция инициализации PaddleOCR не используется
+        return None
 
     def _get_paddle(self, lang: str):
-        if lang not in self._paddle_instances:
-            try:
-                self._paddle_instances[lang] = self._init_paddle(lang)
-                log.info("PaddleOCR (%s) initialized", lang)
-            except Exception as e:
-                log.error("PaddleOCR (%s) failed: %s", lang, e)
-                return self._paddle_instances.get("korean")
-        return self._paddle_instances[lang]
+        # Функция получения PaddleOCR не используется
+        return None
 
     @property
     def is_connected(self) -> bool:
+        # Всегда возвращаем True, так как ocr.space доступен по сети
         return True
 
     async def ocr_pages(self, pages: list[bytes], lang: str = "kor") -> list[list[dict]]:
-        if self._paddle_available:
-            paddle_lang = PADDLE_LANG_MAP.get(lang, "korean")
-            return await self._ocr_paddle(pages, paddle_lang)
+        # Всегда используем ocr.space
         return await self._ocr_space(pages, lang)
 
     @staticmethod

@@ -11,12 +11,12 @@ from typing import Optional, List, Dict, Any
 
 from sources.mangadex import MangaDexSource
 from translator.llm import LLMTranslator
-from translator.renderer import TextRenderer
+from translator.renderer import TextRenderer, _classify_font_style, _is_caption_region
 from translator.colab_client import ColabClient
 from translator.inpainter import LaMaInpainter
 from translator.bubbles import get_bubble_bounds, build_mask
 from translator.modal_client import inpaint_batch_sync, MODAL_AVAILABLE
-from translator.upscaler import RealESRGANUpscaler
+# from translator.upscaler import RealESRGANUpscaler  # Отключено для экономии RAM
 from cfg import TEMP_DIR
 
 from cfg.memory import save_translations
@@ -190,7 +190,7 @@ class TranslationPipeline:
         self.inpainter = LaMaInpainter()
         self.progress_callback = None
         self._bg_mask = None
-        self._upscaler = RealESRGANUpscaler()
+        # self._upscaler = RealESRGANUpscaler()  # Отключено для экономии RAM
 
     def on_progress(self, callback):
         self.progress_callback = callback
@@ -315,7 +315,8 @@ class TranslationPipeline:
 
         # ---- Stage 1: Downloader (fetches pages) ----
         async def stage_downloader():
-            sem = asyncio.Semaphore(3)  # max 3 concurrent downloads
+            # Уменьшаем параллельность для экономии RAM
+            sem = asyncio.Semaphore(1)  # max 1 concurrent download
             async def download_one(i: int):
                 async with sem:
                     try:
@@ -350,7 +351,8 @@ class TranslationPipeline:
 
         # ---- Stage 2: Preprocessor (auto-rotate, upscale, OCR) ----
         async def stage_preprocessor():
-            sem = asyncio.Semaphore(2)  # max 2 concurrent OCR
+            # Уменьшаем параллельность для экономии RAM
+            sem = asyncio.Semaphore(1)  # max 1 concurrent OCR
             async def preprocess(item):
                 if item.get("error"):
                     await ocr_queue.put({"index": item["index"], "error": True})
@@ -366,16 +368,16 @@ class TranslationPipeline:
                         # Auto-rotate
                         src_data = self._auto_rotate(src_data)
 
-                        # Upscale if available
-                        if self._upscaler.available:
-                            try:
-                                np_img = np.frombuffer(src_data, np.uint8)
-                                cv_img_up = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
-                                cv_img_up = self._upscaler.upscale(cv_img_up)
-                                _, src_data = cv2.imencode(".png", cv_img_up)
-                                src_data = src_data.tobytes()
-                            except Exception:
-                                pass
+                        # Upscale (отключено для экономии RAM)
+                        # if self._upscaler.available:
+                        #     try:
+                        #         np_img = np.frombuffer(src_data, np.uint8)
+                        #         cv_img_up = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+                        #         cv_img_up = self._upscaler.upscale(cv_img_up)
+                        #         _, src_data = cv2.imencode(".png", cv_img_up)
+                        #         src_data = src_data.tobytes()
+                        #     except Exception:
+                        #         pass
 
                         # OCR source
                         ocr_texts = []
@@ -397,6 +399,14 @@ class TranslationPipeline:
                         groups = _group_texts_by_bubble(ocr_texts)
                         grouped_ko = [" ".join(r.get("text", "") for r in g if r.get("text")) for g in groups]
 
+                        # Detect speakers for character voice consistency
+                        # Build a temporary glossary from existing memory for speaker matching
+                        from cfg.memory import _load as _load_memory
+                        memory_data = _load_memory()
+                        manga_memory = memory_data.get(mangadex_manga_id, {})
+                        glossary_for_speaker = manga_memory.get("glossary", {})
+                        speakers = [_extract_speaker(ko, glossary_for_speaker) for ko in grouped_ko]
+
                         # OCR English reference
                         en_texts = []
                         if en_data and ocr_texts and self.colab.is_connected:
@@ -414,6 +424,7 @@ class TranslationPipeline:
                             "en_texts": en_texts,
                             "groups": groups,
                             "grouped_ko": grouped_ko,
+                            "speakers": speakers,
                             "img_w": img_w,
                             "img_h": img_h,
                             "is_credit": is_credit,
@@ -449,6 +460,7 @@ class TranslationPipeline:
                         "ocr_texts": item.get("ocr_texts", []),
                         "groups": item.get("groups", []),
                         "grouped_ko": item.get("grouped_ko", []),
+                        "speakers": item.get("speakers", []),
                         "img_w": item.get("img_w", 0),
                         "img_h": item.get("img_h", 0),
                         "skip_render": True,
@@ -461,6 +473,7 @@ class TranslationPipeline:
                 en_texts = item["en_texts"]
                 img_w = item["img_w"]
                 img_h = item["img_h"]
+                speakers = item.get("speakers", [])
 
                 try:
                     await self._report(f"Перевод стр. {idx+1}/{total_pages}", 10 + int(80 * idx / total_pages), 100)
@@ -476,6 +489,11 @@ class TranslationPipeline:
                     await self._report(f"Перевод ошибка стр. {idx+1}: {e}", 10 + int(80 * idx / total_pages), 100)
                     translations = []
 
+                # Attach detected speakers to translations for memory/profile update
+                for t, sp in zip(translations, speakers):
+                    if sp:
+                        t["speaker"] = sp
+
                 await translated_queue.put({
                     "index": idx,
                     "src_data": item["src_data"],
@@ -484,6 +502,7 @@ class TranslationPipeline:
                     "ocr_texts": item["ocr_texts"],
                     "groups": item["groups"],
                     "grouped_ko": grouped_ko,
+                    "speakers": speakers,
                     "img_w": img_w,
                     "img_h": img_h,
                 })
@@ -491,7 +510,8 @@ class TranslationPipeline:
 
         # ---- Stage 4: Inpainter + Renderer ----
         async def stage_inpainter_renderer():
-            sem = asyncio.Semaphore(2)
+            # Уменьшаем параллельность для экономии RAM
+            sem = asyncio.Semaphore(1)
             while True:
                 item = await translated_queue.get()
                 if item is None:  # sentinel
@@ -542,7 +562,7 @@ class TranslationPipeline:
                             text_bbox = (min(xs), min(ys), max(xs), max(ys))
                             bubble_bbox, is_bubble = get_bubble_bounds(cv_img, text_bbox, w, h)
                             all_bubble_bboxes.append(bubble_bbox)
-                            bubble_pairs.append((bubble_bbox, ru, is_bubble))
+                            bubble_pairs.append((bubble_bbox, ru, is_bubble, text_bbox))
 
                         if not bubble_pairs:
                             async with results_lock:
@@ -580,10 +600,23 @@ class TranslationPipeline:
                             del c
                         del cv_img, mask, filled_img
 
-                        for bubble_bbox, text, is_bubble in bubble_pairs:
+                        for bubble_bbox, text, is_bubble, text_bbox in bubble_pairs:
                             try:
+                                # Classify caption (rectangular) vs dialogue (round bubble)
+                                font_type = "dialogue"
+                                if not is_bubble or _is_caption_region(cv_img, text_bbox):
+                                    font_type = "narration"
+                                else:
+                                    # Font-style matching: handwritten vs clean
+                                    bubble_mask_img = self._bg_mask
+                                    if bubble_mask_img is not None:
+                                        mask_pil = Image.fromarray(bubble_mask_img)
+                                        style = _classify_font_style(img, mask_pil, bubble_bbox)
+                                        if style == "narration":
+                                            font_type = "narration"
                                 clean_img = self.renderer.render_bubble_text(
-                                    clean_img, bubble_bbox, text, font_type="dialogue", is_bubble=is_bubble
+                                    clean_img, bubble_bbox, text, font_type=font_type, is_bubble=is_bubble,
+                                    original_img=img,
                                 )
                             except Exception:
                                 continue
@@ -646,6 +679,15 @@ class TranslationPipeline:
             path = work_dir / f"page_{i:03d}.png"
             if path.exists():
                 final_paths.append(str(path))
+
+        # Сохраняем переводы в память
+        if final_paths:
+from cfg.memory import save_translations, _extract_speaker
+            current_chapter_translations = []
+            for item in translated_queue._queue:
+                if item and not item.get("skip_render") and item.get("translations"):
+                    current_chapter_translations.extend(item["translations"])
+            await asyncio.to_thread(save_translations, mangadex_manga_id, mangadex_manga_id, chapter_number, current_chapter_translations)
 
         await self._report("Готово!", 100, 100)
         return final_paths

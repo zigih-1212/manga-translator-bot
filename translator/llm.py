@@ -6,7 +6,7 @@ import logging
 import httpx
 from cfg import GLOSSARY, CONFIG, COLAB_URL, OPENROUTER_API_KEY, GROQ_API_KEY, GEMINI_API_KEY
 
-from cfg.memory import get_context as get_memory_context, get_glossary as get_memory_glossary
+from cfg.memory import get_context as get_memory_context, get_glossary as get_memory_glossary, get_character_profiles
 from .log import log
 
 
@@ -84,7 +84,7 @@ Respond ONLY with JSON array:
 [{{"id": 1, "ru": "translation"}}, {{"id": 2, "ru": "translation"}}, ...]"""
 
 
-def _build_prompt(korean_texts, english_texts, page_number, context, glossary, memory_context="", memory_glossary=None, source_lang="ko"):
+def _build_prompt(korean_texts, english_texts, page_number, context, glossary, memory_context="", memory_glossary=None, character_profiles=None, source_lang="ko"):
     parts = []
     if memory_context:
         parts.append("PREVIOUS CHAPTERS (translations of this manga from earlier chapters):\n" + memory_context)
@@ -111,6 +111,15 @@ def _build_prompt(korean_texts, english_texts, page_number, context, glossary, m
         if lines:
             parts.append("GLOSSARY:\n" + "\n".join(lines))
             parts.append("RULE: If a Korean term appears in GLOSSARY above, you MUST use the listed Russian translation. Do NOT translate it differently.")
+    # Character voice profiles
+    if character_profiles:
+        lines = ["CHARACTER VOICES (match their tone & politeness):"]
+        for name, prof in character_profiles.items():
+            tone = prof.get("tone", "")
+            pol = prof.get("politeness", "neutral")
+            ex = "; ".join(prof.get("examples_ru", []))
+            lines.append(f"  {name}: {tone} ({pol}). Examples: {ex}")
+        parts.append("\n".join(lines))
     if english_texts:
         en_block = "\n".join(f"[{i+1}] {t}" for i, t in enumerate(english_texts))
         parts.append("ENGLISH REFERENCE (for context):\n" + en_block)
@@ -149,6 +158,7 @@ class LLMTranslator:
         self.temperature = CONFIG["llm"]["temperature"]
         self._memory_context = ""
         self._memory_glossary = {}
+        self._character_profiles = {}
 
         if self.colab_url:
             self._test_colab()
@@ -174,16 +184,21 @@ class LLMTranslator:
             log.warning("Colab unreachable, skipping")
 
     def _init_providers(self):
-        if GEMINI_API_KEY:
-            self._providers.append(("Gemini 2.0 Flash", self._call_gemini))
+        # Colab Server (если доступен) - имеет приоритет, так как локальный
         if self.colab_available:
             self._providers.append(("Colab Server", self._call_colab))
+        # Groq (Llama 70B) - бесплатно и качественно
         if GROQ_API_KEY:
             self._providers.append(("Groq (Llama 70B)", self._call_groq))
+        # Gemini 2.0 Flash - если Groq не сработал
+        if GEMINI_API_KEY:
+            self._providers.append(("Gemini 2.0 Flash", self._call_gemini))
+        # OpenRouter - если предыдущие не сработали
         if OPENROUTER_API_KEY:
             self._providers.append(("OpenRouter Free", self._call_openrouter_free))
         if OPENROUTER_API_KEY:
             self._providers.append(("OpenRouter Paid", self._call_openrouter_paid))
+        # deep-translator (Google Translate) - как последний fallback
         self._providers.append(("deep-translator", self._call_fallback))
 
     def _print_chain(self):
@@ -208,7 +223,7 @@ class LLMTranslator:
 
     async def _call_openrouter(self, korean_texts, english_texts, page_number, model, timeout=120.0) -> list[dict] | None:
         sl = getattr(self, '_source_lang', 'ko')
-        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary, source_lang=sl)
+        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary, source_lang=sl, character_profiles=self._character_profiles)
         payload = {
             "model": model,
             "messages": [
@@ -237,7 +252,7 @@ class LLMTranslator:
                 return result
             return None
 
-    async def _call_openrouter_free(self, korean_texts, english_texts, page_number) -> list[dict] | None:
+async def _call_openrouter_free(self, korean_texts, english_texts, page_number) -> list[dict] | None:
         try:
             return await asyncio.wait_for(
                 self._call_openrouter(korean_texts, english_texts, page_number, "openrouter/free"),
@@ -251,7 +266,7 @@ class LLMTranslator:
 
     async def _call_groq(self, korean_texts, english_texts, page_number) -> list[dict] | None:
         sl = getattr(self, '_source_lang', 'ko')
-        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary, source_lang=sl)
+        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary, source_lang=sl, character_profiles=self._character_profiles)
         payload = {
             "model": "llama-3.3-70b-versatile",
             "messages": [
@@ -282,7 +297,7 @@ class LLMTranslator:
 
     async def _call_gemini(self, korean_texts, english_texts, page_number) -> list[dict] | None:
         sl = getattr(self, '_source_lang', 'ko')
-        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary, source_lang=sl)
+        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary, source_lang=sl, character_profiles=self._character_profiles)
         payload = {
             "contents": [
                 {
@@ -331,6 +346,7 @@ class LLMTranslator:
                 "context": {
                     "glossary": self._build_glossary_dict(),
                     "previous_pages": self.context_pages[-5:],
+                    "character_profiles": self._character_profiles,
                 },
             }
             resp = await self.colab_client.post(f"{self.colab_url}/translate", json=payload, timeout=60.0)
@@ -365,6 +381,7 @@ class LLMTranslator:
 
         self._memory_context = get_memory_context(manga_id) if manga_id else ""
         self._memory_glossary = get_memory_glossary(manga_id) if manga_id else {}
+        self._character_profiles = get_character_profiles(manga_id) if manga_id else {}
 
         cached = TranslationCache.get(korean_texts, source_lang)
         if cached is not None:

@@ -14,6 +14,7 @@ from cfg import TG_BOT_TOKEN, TG_PROXY_URL, COLAB_URL, CONFIG, save_config, vali
 from bot.handlers import start_router, titles_router, translate_router, status_router, manga_info_router
 from sources.mangadex import MangaDexSource
 from translator.pipeline import TranslationPipeline
+from cfg.db import TranslationQueueDB
 
 HTTP_PROXY = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")
 
@@ -179,6 +180,35 @@ async def scheduler_loop(bot: Bot):
             await check_new_chapters(bot)
         except Exception as e:
             logger.exception(f"auto: ошибка: {e}")
+
+        # Проверка и запуск задач из очереди
+        logger.info("auto: проверка очереди переводов...")
+        db = TranslationQueueDB()
+        pending_tasks = db.get_pending_tasks()
+        if pending_tasks:
+            logger.info(f"Найдено {len(pending_tasks)} задач в очереди.")
+            for task_entry in pending_tasks:
+                try:
+                    logger.info(f"Запускаю перевод из очереди: {task_entry['manga_id']} - {task_entry['chapter_number']}")
+                    db.update_task_status(task_entry['manga_id'], task_entry['chapter_number'], 'processing')
+                    pipeline = TranslationPipeline()
+                    page_paths = await pipeline.process_chapter(
+                        mangadex_manga_id=task_entry['manga_id'],
+                        chapter_number=task_entry['chapter_number'],
+                        source_lang=task_entry['source_lang'],
+                        target_lang="en",
+                    )
+                    await pipeline.close()
+                    if page_paths:
+                        db.update_task_status(task_entry['manga_id'], task_entry['chapter_number'], 'completed')
+                        # Здесь можно добавить отправку в Telegram или публикацию
+                        logger.info(f"Глава {task_entry['chapter_number']} для {task_entry['manga_id']} переведена.")
+                    else:
+                        db.update_task_status(task_entry['manga_id'], task_entry['chapter_number'], 'failed', "Нет страниц или не удалось перевести")
+                except Exception as e:
+                    logger.exception(f"Ошибка при переводе из очереди: {e}")
+                    db.update_task_status(task_entry['manga_id'], task_entry['chapter_number'], 'failed', str(e))
+        db.close()
 
 
 async def startup_translate(bot: Bot):

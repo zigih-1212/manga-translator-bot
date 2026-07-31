@@ -10,6 +10,9 @@ from pydantic import BaseModel
 
 app = modal.App("manga-inpaint")
 
+# Volume for model persistence across container restarts
+models_volume = modal.Volume.from_name("manga-inpaint-models", create_if_missing=True)
+
 image = (
     modal.Image.debian_slim()
     .apt_install("libgl1")
@@ -28,7 +31,7 @@ image = (
 )
 
 
-@app.function(gpu="any", image=image, timeout=600, scaledown_window=300)
+@app.function(gpu="any", image=image, timeout=600, scaledown_window=60, volumes={"/models": models_volume})
 def inpaint_batch(images_b64: list[str], dilation: int = 5, radius: int = 10) -> list[str]:
     import asyncio
     import onnxruntime
