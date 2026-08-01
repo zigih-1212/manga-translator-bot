@@ -158,6 +158,58 @@ async def cmd_queue_status(message: Message):
     await message.answer(response_text, parse_mode="HTML")
 
 
+@router.message(Command("chapters"))
+async def cmd_chapters(message: Message):
+    """Show real chapter count from MangaDex for a selected title."""
+    titles = CONFIG.get("titles", [])
+    if not titles:
+        await message.answer("Нет тайтлов. Сначала /add_title")
+        return
+
+    buttons = []
+    for i, t in enumerate(titles):
+        buttons.append([InlineKeyboardButton(
+            text=f"{t['name']} ({t.get('chapters_count', '?')} глав)",
+            callback_data=f"chapters_title:{i}",
+        )])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer("Выбери тайтл для проверки глав:", reply_markup=kb)
+
+
+@router.callback_query(lambda c: c.data.startswith("chapters_title:"))
+async def check_chapters(callback: CallbackQuery):
+    idx = int(callback.data.split(":")[1])
+    title = CONFIG["titles"][idx]
+    manga_id = title["mangadex_id"]
+    source_lang = title.get("source_lang", "ko")
+
+    await callback.answer("Проверяю на MangaDex...")
+    await callback.message.answer(f"🔍 Проверяю главы «{title['name']}» (язык: {source_lang})...")
+
+    try:
+        mangadex_source = MangaDexSource()
+        chapters = await mangadex_source.get_chapters(manga_id, source_lang)
+        await mangadex_source.close()
+
+        if not chapters:
+            await callback.message.answer(f"Главы не найдены для «{title['name']}» на языке {source_lang}.")
+            return
+
+        numbers = sorted(set(float(c.number) for c in chapters if c.number))
+        await callback.message.answer(
+            f"📚 <b>{title['name']}</b>\n"
+            f"🔗 MangaDex ID: <code>{manga_id}</code>\n"
+            f"🌐 Язык: {source_lang}\n"
+            f"📖 Найдено глав: <b>{len(chapters)}</b> (уникальных номеров: <b>{len(numbers)}</b>)\n"
+            f"📐 Диапазон: <code>{numbers[0]:.0f}</code> — <code>{numbers[-1]:.0f}</code>\n"
+            f"✅ В очереди: <b>{db.get_pending_count(manga_id)}</b> ожидают, "
+            f"<b>{db.get_processing_count(manga_id)}</b> в работе",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        await callback.message.answer(f"Ошибка проверки глав: {e}")
+
+
 @router.shutdown()
 async def shutdown_handler():
     db.close()

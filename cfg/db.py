@@ -70,6 +70,16 @@ class TranslationQueueDB:
             "error_message": row[7],
         } for row in cursor.fetchall()]
 
+    def get_pending_count(self, manga_id: str) -> int:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM queue WHERE manga_id = ? AND status = 'pending'", (manga_id,))
+        return cursor.fetchone()[0]
+
+    def get_processing_count(self, manga_id: str) -> int:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM queue WHERE manga_id = ? AND status = 'processing'", (manga_id,))
+        return cursor.fetchone()[0]
+
     def update_task_status(self, manga_id: str, chapter_number: str, status: str, error_message: str | None = None):
         cursor = self.conn.cursor()
         now = datetime.now().isoformat()
