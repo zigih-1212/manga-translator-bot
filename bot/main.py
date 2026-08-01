@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import os
+import signal
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 import httpx
@@ -14,6 +16,7 @@ from cfg import TG_BOT_TOKEN, TG_PROXY_URL, COLAB_URL, CONFIG, save_config, vali
 from bot.handlers import start_router, titles_router, translate_router, status_router, manga_info_router
 from sources.mangadex import MangaDexSource
 from translator.pipeline import TranslationPipeline
+from translator.health import start_health_server, stop_health_server, mark_bot_started, record_error
 from cfg.db import TranslationQueueDB
 
 HTTP_PROXY = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")
@@ -150,6 +153,7 @@ async def check_new_chapters(bot: Bot):
 
                 except Exception as e:
                     logger.exception(f"auto: ошибка главы {ch_str}: {e}")
+                    record_error()
                     await bot.send_message(
                         chat_id,
                         f"❌ {title['name']} — гл. {ch_str}: {e}",
@@ -160,6 +164,7 @@ async def check_new_chapters(bot: Bot):
 
         except Exception as e:
             logger.exception(f"auto: ошибка тайтла {title.get('name')}: {e}")
+            record_error()
 
 
 async def scheduler_loop(bot: Bot):
@@ -180,6 +185,7 @@ async def scheduler_loop(bot: Bot):
             await check_new_chapters(bot)
         except Exception as e:
             logger.exception(f"auto: ошибка: {e}")
+            record_error()
 
         # Проверка и запуск задач из очереди
         logger.info("auto: проверка очереди переводов...")
@@ -207,6 +213,7 @@ async def scheduler_loop(bot: Bot):
                         db.update_task_status(task_entry['manga_id'], task_entry['chapter_number'], 'failed', "Нет страниц или не удалось перевести")
                 except Exception as e:
                     logger.exception(f"Ошибка при переводе из очереди: {e}")
+                    record_error()
                     db.update_task_status(task_entry['manga_id'], task_entry['chapter_number'], 'failed', str(e))
         db.close()
 
@@ -268,11 +275,39 @@ async def main():
 
     logger.info("Bot starting...")
     validate_config()
+
+    health_runner = await start_health_server()
+
+    mark_bot_started()
     asyncio.create_task(_keepalive())
     asyncio.create_task(scheduler_loop(bot))
     asyncio.create_task(startup_translate(bot))
-    await dp.start_polling(bot)
+
+    loop = asyncio.get_running_loop()
+
+    async def _stop_polling():
+        logger.info("Shutdown requested, stopping polling...")
+        await dp.stop_polling()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, lambda: asyncio.create_task(_stop_polling()))
+        except NotImplementedError:
+            pass
+
+    try:
+        await dp.start_polling(bot)
+    except asyncio.CancelledError:
+        logger.info("Polling cancelled, shutting down gracefully...")
+    finally:
+        await dp.stop_polling()
+        await stop_health_server(health_runner)
+        await bot.session.close()
+        logger.info("Shutdown complete.")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        sys.exit(0)

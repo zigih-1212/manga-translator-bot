@@ -1,17 +1,51 @@
 import io
 import os
 import logging
+import time
+import random
+from functools import wraps
 import numpy as np
 import cv2
 from pathlib import Path
 
 log = logging.getLogger("manga_translator")
 
+
+def retry_sync(max_attempts=3, base_delay=1.0, max_delay=10.0, jitter=True):
+    """
+    Retry decorator for synchronous functions with exponential backoff.
+    
+    Args:
+        max_attempts: Maximum number of attempts
+        base_delay: Base delay in seconds
+        max_delay: Maximum delay in seconds
+        jitter: Whether to add random jitter to delay
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_attempts):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    if attempt == max_attempts - 1:
+                        break
+                    delay = min(base_delay * (2 ** attempt), max_delay)
+                    if jitter:
+                        delay *= (0.5 + random.random() * 0.5)
+                    time.sleep(delay)
+            raise last_exception
+        return wrapper
+    return decorator
+
 MODEL_URL = "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.onnx"
 MODEL_DIR = Path(__file__).resolve().parent.parent / "models"
 MODEL_PATH = MODEL_DIR / "RealESRGAN_x4plus.onnx"
 
 
+@retry_sync(max_attempts=3, base_delay=1.0, max_delay=10.0)
 def _ensure_model():
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     if MODEL_PATH.exists():

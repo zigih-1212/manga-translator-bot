@@ -1,6 +1,7 @@
 import json
 import gc
 import asyncio
+import signal
 from pathlib import Path
 from PIL import Image
 import io
@@ -16,10 +17,16 @@ from translator.colab_client import ColabClient
 from translator.inpainter import LaMaInpainter
 from translator.bubbles import get_bubble_bounds, build_mask
 from translator.modal_client import inpaint_batch_sync, MODAL_AVAILABLE
+from translator.sfx_detector import annotate_sfx, is_sfx_text
+from translator.preprocess import preprocess_page, sauvola
 # from translator.upscaler import RealESRGANUpscaler  # Отключено для экономии RAM
 from cfg import TEMP_DIR
 
-from cfg.memory import save_translations
+from cfg.memory import save_translations, _extract_speaker
+from translator.health import inc_metric, record_error, record_ocr, record_llm
+
+# Chunk size for processing chapters in chunks to avoid OOM
+CHUNK_SIZE = 15  # pages per chunk
 
 def _filter_text_regions(ocr_texts: list[dict], img_w: int, img_h: int) -> list[dict]:
     filtered = []
@@ -61,6 +68,16 @@ CREDIT_KEYWORDS = [
     "no part of", "permission", "license", "printed in",
     "содержание", "автор", "художник", "издательство", "тираж",
 ]
+
+
+def _has_dark_content(img: np.ndarray, threshold: float = 0.02) -> bool:
+    """True if a meaningful fraction of pixels are dark (likely text/lines)."""
+    try:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+        dark = float((gray < 128).mean())
+        return dark >= threshold
+    except Exception:
+        return True
 
 
 def _is_credit_page(ocr_texts: list[dict], img_w: int, img_h: int) -> bool:
@@ -303,386 +320,457 @@ class TranslationPipeline:
         # Stage 4: Inpainter + Renderer -> rendered_queue
         # Stage 5: Saver -> done
 
-        raw_queue = asyncio.Queue()
-        ocr_queue = asyncio.Queue()
-        translated_queue = asyncio.Queue()
-        rendered_queue = asyncio.Queue()
-        done_event = asyncio.Event()
+        # Process in chunks to avoid OOM
+        all_final_paths = []
 
-        # Results storage for final collection
-        rendered_results = {}
-        results_lock = asyncio.Lock()
+        for chunk_start in range(0, total_pages, CHUNK_SIZE):
+            chunk_end = min(chunk_start + CHUNK_SIZE, total_pages)
+            chunk_size = chunk_end - chunk_start
+            
+            await self._report(f"Обрабатываем чанк {chunk_start//CHUNK_SIZE + 1}/{(total_pages + CHUNK_SIZE - 1)//CHUNK_SIZE} (стр. {chunk_start+1}-{chunk_end})", 
+                             5 + int(90 * chunk_start / total_pages), 100)
 
-        # ---- Stage 1: Downloader (fetches pages) ----
-        async def stage_downloader():
-            # Уменьшаем параллельность для экономии RAM
-            sem = asyncio.Semaphore(1)  # max 1 concurrent download
-            async def download_one(i: int):
-                async with sem:
-                    try:
-                        src_data = await self.mangadex.download_page(src_pages[i])
-                        en_data = None
-                        if i in en_page_map:
-                            en_data = await self.mangadex.download_page(en_page_map[i])
-                        # Get image dimensions
-                        tmp_img = Image.open(io.BytesIO(src_data))
-                        img_w, img_h = tmp_img.size
-                        tmp_img.close()
-                        return {
-                            "index": i,
-                            "src_data": src_data,
-                            "en_data": en_data,
-                            "img_w": img_w,
-                            "img_h": img_h,
-                        }
-                    except Exception as e:
-                        await self._report(f"Ошибка скачивания стр. {i+1}: {e}", 10 + int(80 * i / total_pages), 100)
-                        return None
+            # Initialize queues for this chunk
+            raw_queue = asyncio.Queue()
+            ocr_queue = asyncio.Queue()
+            translated_queue = asyncio.Queue()
+            rendered_queue = asyncio.Queue()
+            done_event = asyncio.Event()
 
-            # Launch all downloads with limited concurrency
-            tasks = [asyncio.create_task(download_one(i)) for i in range(total_pages)]
-            for i, task in enumerate(tasks):
-                result = await task
-                if result:
-                    await raw_queue.put(result)
-                else:
-                    await raw_queue.put({"index": i, "error": True})
-            await raw_queue.put(None)  # sentinel
+            # Results storage for final collection
+            rendered_results = {}
+            results_lock = asyncio.Lock()
 
-        # ---- Stage 2: Preprocessor (auto-rotate, upscale, OCR) ----
-        async def stage_preprocessor():
-            # Уменьшаем параллельность для экономии RAM
-            sem = asyncio.Semaphore(1)  # max 1 concurrent OCR
-            async def preprocess(item):
-                if item.get("error"):
-                    await ocr_queue.put({"index": item["index"], "error": True})
-                    return
-                async with sem:
+            # Store page indices mapping for this chunk
+            chunk_page_indices = list(range(chunk_start, chunk_end))
+
+            # ---- Stage 1: Downloader (fetches pages) ----
+            async def stage_downloader():
+                # Уменьшаем параллельность для экономии RAM
+                sem = asyncio.Semaphore(1)  # max 1 concurrent download
+                async def download_one(i: int):
+                    async with sem:
+                        try:
+                            global_index = chunk_start + i
+                            src_data = await self.mangadex.download_page(src_pages[global_index])
+                            en_data = None
+                            if global_index in en_page_map:
+                                en_data = await self.mangadex.download_page(en_page_map[global_index])
+                            # Get image dimensions
+                            tmp_img = Image.open(io.BytesIO(src_data))
+                            img_w, img_h = tmp_img.size
+                            tmp_img.close()
+                            return {
+                                "index": i,  # local index within chunk
+                                "src_data": src_data,
+                                "en_data": en_data,
+                                "img_w": img_w,
+                                "img_h": img_h,
+                            }
+                        except Exception as e:
+                            await self._report(f"Ошибка скачивания стр. {chunk_start+i+1}: {e}", 
+                                             10 + int(80 * (chunk_start+i) / total_pages), 100)
+                            return None
+
+                # Launch all downloads with limited concurrency
+                tasks = [asyncio.create_task(download_one(i)) for i in range(chunk_size)]
+                for i, task in enumerate(tasks):
+                    result = await task
+                    if result:
+                        await raw_queue.put(result)
+                    else:
+                        await raw_queue.put({"index": i, "error": True})
+                await raw_queue.put(None)  # sentinel
+
+            # ---- Stage 2: Preprocessor (auto-rotate, upscale, OCR) ----
+            async def stage_preprocessor():
+                # Параллельный OCR: несколько страниц одновременно (лимитер защищает)
+                sem = asyncio.Semaphore(3)
+                async def preprocess(item):
+                    if item.get("error"):
+                        await ocr_queue.put({"index": item["index"], "error": True})
+                        return
+                    async with sem:
+                        idx = item["index"]
+                        src_data = item["src_data"]
+                        en_data = item["en_data"]
+                        img_w = item["img_w"]
+                        img_h = item["img_h"]
+
+                        try:
+                            # Auto-rotate
+                            src_data = self._auto_rotate(src_data)
+
+                            # Upscale (отключено для экономии RAM)
+                            # if self._upscaler.available:
+                            #     try:
+                            #         np_img = np.frombuffer(src_data, np.uint8)
+                            #         cv_img_up = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+                            #         cv_img_up = self._upscaler.upscale(cv_img_up)
+                            #         _, src_data = cv2.imencode(".png", cv_img_up)
+                            #         src_data = src_data.tobytes()
+                            #     except Exception:
+                            #         pass
+
+                            # OCR source
+                            ocr_texts = []
+                            if self.colab.is_connected:
+                                try:
+                                    preprocessed = src_data
+                                    try:
+                                        arr = np.frombuffer(src_data, np.uint8)
+                                        cv_page = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                                        if cv_page is not None:
+                                            cv_page = preprocess_page(cv_page)
+                                            ok, enc = cv2.imencode(".png", cv_page)
+                                            if ok:
+                                                preprocessed = enc.tobytes()
+                                    except Exception:
+                                        pass
+                                    ocr_result = await self.colab.ocr_pages([preprocessed], lang=source_lang)
+                                    ocr_texts = ocr_result[0] if ocr_result else []
+
+                                    # Auto-retry: page has visible dark pixels but OCR found nothing
+                                    if not ocr_texts:
+                                        try:
+                                            arr = np.frombuffer(src_data, np.uint8)
+                                            cv_page = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                                            if cv_page is not None and _has_dark_content(cv_page):
+                                                # Retry with Sauvola binarization for better contrast
+                                                cv_binary = sauvola(cv_page)
+                                                cv_retry = cv2.cvtColor(cv_binary, cv2.COLOR_GRAY2BGR)
+                                                ok, enc = cv2.imencode(".png", cv_retry)
+                                                if ok:
+                                                    ocr_result = await self.colab.ocr_pages([enc.tobytes()], lang=source_lang)
+                                                    ocr_texts = ocr_result[0] if ocr_result else []
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    ocr_texts = []
+                            ocr_texts = _filter_text_regions(ocr_texts, img_w, img_h)
+                            annotate_sfx(ocr_texts, source_lang=source_lang)
+
+                            # Credit page detection
+                            is_credit = False
+                            if ocr_texts and _is_credit_page(ocr_texts, img_w, img_h):
+                                is_credit = True
+                                ocr_texts = []
+
+                            # Group texts
+                            groups = _group_texts_by_bubble(ocr_texts)
+                            grouped_ko = [" ".join(r.get("text", "") for r in g if r.get("text")) for g in groups]
+                            sfx_flags = [bool(g) and all(r.get("sfx") for r in g) for g in groups]
+
+                            # Detect speakers for character voice consistency
+                            # Build a temporary glossary from existing memory for speaker matching
+                            from cfg.memory import _load as _load_memory
+                            memory_data = _load_memory()
+                            manga_memory = memory_data.get(mangadex_manga_id, {})
+                            glossary_for_speaker = manga_memory.get("glossary", {})
+                            speakers = [_extract_speaker(ko, glossary_for_speaker) for ko in grouped_ko]
+
+                            # OCR English reference
+                            en_texts = []
+                            if en_data and ocr_texts and self.colab.is_connected:
+                                try:
+                                    en_ocr = await self.colab.ocr_pages([en_data], lang=target_lang)
+                                    en_texts = [r.get("text", "") for r in (en_ocr[0] if en_ocr else []) if r.get("text")]
+                                except Exception:
+                                    pass
+
+                            await ocr_queue.put({
+                                "index": item["index"],
+                                "src_data": src_data,
+                                "en_data": en_data,
+                                "ocr_texts": ocr_texts,
+                                "en_texts": en_texts,
+                                "groups": groups,
+                                "grouped_ko": grouped_ko,
+                                "sfx_flags": sfx_flags,
+                                "speakers": speakers,
+                                "img_w": img_w,
+                                "img_h": img_h,
+                                "is_credit": is_credit,
+                            })
+                        except Exception as e:
+                            await self._report(f"Preprocess error page {chunk_start+idx+1}: {e}", 
+                                             10 + int(80 * (chunk_start+idx) / total_pages), 100)
+                            await ocr_queue.put({"index": item["index"], "error": True})
+
+                while True:
+                    item = await raw_queue.get()
+                    if item is None:  # sentinel
+                        await ocr_queue.put(None)
+                        raw_queue.task_done()
+                        break
+                    await preprocess(item)
+                    raw_queue.task_done()
+
+            # ---- Stage 3: Translator ----
+            async def stage_translator():
+                while True:
+                    item = await ocr_queue.get()
+                    if item is None:  # sentinel
+                        await translated_queue.put(None)
+                        ocr_queue.task_done()
+                        break
+
+                    if item.get("error") or item.get("is_credit"):
+                        await translated_queue.put({
+                            "index": item["index"],
+                            "src_data": item.get("src_data"),
+                            "en_data": item.get("en_data"),
+                            "translations": [],
+                            "ocr_texts": item.get("ocr_texts", []),
+                            "groups": item.get("groups", []),
+                            "grouped_ko": item.get("grouped_ko", []),
+                            "sfx_flags": item.get("sfx_flags", []),
+                            "speakers": item.get("speakers", []),
+                            "img_w": item.get("img_w", 0),
+                            "img_h": item.get("img_h", 0),
+                            "skip_render": True,
+                        })
+                        ocr_queue.task_done()
+                        continue
+
                     idx = item["index"]
-                    src_data = item["src_data"]
-                    en_data = item["en_data"]
+                    grouped_ko = item["grouped_ko"]
+                    en_texts = item["en_texts"]
                     img_w = item["img_w"]
                     img_h = item["img_h"]
+                    speakers = item.get("speakers", [])
 
                     try:
-                        # Auto-rotate
-                        src_data = self._auto_rotate(src_data)
-
-                        # Upscale (отключено для экономии RAM)
-                        # if self._upscaler.available:
-                        #     try:
-                        #         np_img = np.frombuffer(src_data, np.uint8)
-                        #         cv_img_up = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
-                        #         cv_img_up = self._upscaler.upscale(cv_img_up)
-                        #         _, src_data = cv2.imencode(".png", cv_img_up)
-                        #         src_data = src_data.tobytes()
-                        #     except Exception:
-                        #         pass
-
-                        # OCR source
-                        ocr_texts = []
-                        if self.colab.is_connected:
-                            try:
-                                ocr_result = await self.colab.ocr_pages([src_data], lang=source_lang)
-                                ocr_texts = ocr_result[0] if ocr_result else []
-                            except Exception:
-                                ocr_texts = []
-                        ocr_texts = _filter_text_regions(ocr_texts, img_w, img_h)
-
-                        # Credit page detection
-                        is_credit = False
-                        if ocr_texts and _is_credit_page(ocr_texts, img_w, img_h):
-                            is_credit = True
-                            ocr_texts = []
-
-                        # Group texts
-                        groups = _group_texts_by_bubble(ocr_texts)
-                        grouped_ko = [" ".join(r.get("text", "") for r in g if r.get("text")) for g in groups]
-
-                        # Detect speakers for character voice consistency
-                        # Build a temporary glossary from existing memory for speaker matching
-                        from cfg.memory import _load as _load_memory
-                        memory_data = _load_memory()
-                        manga_memory = memory_data.get(mangadex_manga_id, {})
-                        glossary_for_speaker = manga_memory.get("glossary", {})
-                        speakers = [_extract_speaker(ko, glossary_for_speaker) for ko in grouped_ko]
-
-                        # OCR English reference
-                        en_texts = []
-                        if en_data and ocr_texts and self.colab.is_connected:
-                            try:
-                                en_ocr = await self.colab.ocr_pages([en_data], lang=target_lang)
-                                en_texts = [r.get("text", "") for r in (en_ocr[0] if en_ocr else []) if r.get("text")]
-                            except Exception:
-                                pass
-
-                        await ocr_queue.put({
-                            "index": item["index"],
-                            "src_data": src_data,
-                            "en_data": en_data,
-                            "ocr_texts": ocr_texts,
-                            "en_texts": en_texts,
-                            "groups": groups,
-                            "grouped_ko": grouped_ko,
-                            "speakers": speakers,
-                            "img_w": img_w,
-                            "img_h": img_h,
-                            "is_credit": is_credit,
-                        })
+                        await self._report(f"Перевод стр. {chunk_start+idx+1}/{total_pages}", 
+                                         10 + int(80 * (chunk_start+idx) / total_pages), 100)
+                        translations = await self.translator.translate_page(
+                            korean_texts=grouped_ko,
+                            english_texts=item["en_texts"],
+                            page_number=chunk_start + idx + 1,
+                            manga_id=mangadex_manga_id,
+                            chapter=chapter_number,
+                            source_lang=source_lang,
+                        )
                     except Exception as e:
-                        await self._report(f"Preprocess error page {idx+1}: {e}", 10 + int(80 * idx / total_pages), 100)
-                        await ocr_queue.put({"index": item["index"], "error": True})
+                        await self._report(f"Перевод ошибка стр. {chunk_start+idx+1}: {e}", 
+                                         10 + int(80 * (chunk_start+idx) / total_pages), 100)
+                        translations = []
 
-            while True:
-                item = await raw_queue.get()
-                if item is None:  # sentinel
-                    await ocr_queue.put(None)
-                    raw_queue.task_done()
-                    break
-                await preprocess(item)
-                raw_queue.task_done()
+                    # Attach detected speakers to translations for memory/profile update
+                    for t, sp in zip(translations, speakers):
+                        if sp:
+                            t["speaker"] = sp
 
-        # ---- Stage 3: Translator ----
-        async def stage_translator():
-            while True:
-                item = await ocr_queue.get()
-                if item is None:  # sentinel
-                    await translated_queue.put(None)
-                    ocr_queue.task_done()
-                    break
+                    # Preserve SFX regions verbatim (do not render translation over them)
+                    sfx_flags = item.get("sfx_flags", [])
+                    for t, ko, is_sfx in zip(translations, grouped_ko, sfx_flags):
+                        if is_sfx:
+                            t["ru"] = ko
+                            t["sfx"] = True
 
-                if item.get("error") or item.get("is_credit"):
                     await translated_queue.put({
-                        "index": item["index"],
-                        "src_data": item.get("src_data"),
+                        "index": idx,
+                        "src_data": item["src_data"],
                         "en_data": item.get("en_data"),
-                        "translations": [],
-                        "ocr_texts": item.get("ocr_texts", []),
-                        "groups": item.get("groups", []),
-                        "grouped_ko": item.get("grouped_ko", []),
-                        "speakers": item.get("speakers", []),
-                        "img_w": item.get("img_w", 0),
-                        "img_h": item.get("img_h", 0),
-                        "skip_render": True,
+                        "translations": translations,
+                        "ocr_texts": item["ocr_texts"],
+                        "groups": item["groups"],
+                        "grouped_ko": grouped_ko,
+                        "sfx_flags": sfx_flags,
+                        "speakers": speakers,
+                        "img_w": img_w,
+                        "img_h": img_h,
                     })
                     ocr_queue.task_done()
-                    continue
 
-                idx = item["index"]
-                grouped_ko = item["grouped_ko"]
-                en_texts = item["en_texts"]
-                img_w = item["img_w"]
-                img_h = item["img_h"]
-                speakers = item.get("speakers", [])
+            # ---- Stage 4: Inpainter + Renderer ----
+            async def stage_inpainter_renderer():
+                # Уменьшаем параллельность для экономии RAM
+                sem = asyncio.Semaphore(1)
+                while True:
+                    item = await translated_queue.get()
+                    if item is None:  # sentinel
+                        await rendered_queue.put(None)
+                        translated_queue.task_done()
+                        break
 
-                try:
-                    await self._report(f"Перевод стр. {idx+1}/{total_pages}", 10 + int(80 * idx / total_pages), 100)
-                    translations = await self.translator.translate_page(
-                        korean_texts=grouped_ko,
-                        english_texts=item["en_texts"],
-                        page_number=idx + 1,
-                        manga_id=mangadex_manga_id,
-                        chapter=chapter_number,
-                        source_lang=source_lang,
-                    )
-                except Exception as e:
-                    await self._report(f"Перевод ошибка стр. {idx+1}: {e}", 10 + int(80 * idx / total_pages), 100)
-                    translations = []
+                    if item.get("skip_render") or not item["translations"]:
+                        # Just save original
+                        idx = item["index"]
+                        src_data = item.get("src_data", b"")
+                        async with results_lock:
+                            rendered_results[idx] = src_data
+                        translated_queue.task_done()
+                        continue
 
-                # Attach detected speakers to translations for memory/profile update
-                for t, sp in zip(translations, speakers):
-                    if sp:
-                        t["speaker"] = sp
+                    async with sem:
+                        idx = item["index"]
+                        src_data = item["src_data"]
+                        translations = item["translations"]
+                        ocr_texts = item["ocr_texts"]
+                        groups = item["groups"]
 
-                await translated_queue.put({
-                    "index": idx,
-                    "src_data": item["src_data"],
-                    "en_data": item.get("en_data"),
-                    "translations": translations,
-                    "ocr_texts": item["ocr_texts"],
-                    "groups": item["groups"],
-                    "grouped_ko": grouped_ko,
-                    "speakers": speakers,
-                    "img_w": img_w,
-                    "img_h": img_h,
-                })
-                ocr_queue.task_done()
+                        try:
+                            img = Image.open(io.BytesIO(src_data)).convert("RGB")
+                            cv_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+                            h, w = cv_img.shape[:2]
 
-        # ---- Stage 4: Inpainter + Renderer ----
-        async def stage_inpainter_renderer():
-            # Уменьшаем параллельность для экономии RAM
-            sem = asyncio.Semaphore(1)
-            while True:
-                item = await translated_queue.get()
-                if item is None:  # sentinel
-                    await rendered_queue.put(None)
-                    translated_queue.task_done()
-                    break
-
-                if item.get("skip_render") or not item["translations"]:
-                    # Just save original
-                    idx = item["index"]
-                    src_data = item.get("src_data", b"")
-                    async with results_lock:
-                        rendered_results[idx] = src_data
-                    translated_queue.task_done()
-                    continue
-
-                async with sem:
-                    idx = item["index"]
-                    src_data = item["src_data"]
-                    translations = item["translations"]
-                    ocr_texts = item["ocr_texts"]
-                    groups = item["groups"]
-
-                    try:
-                        img = Image.open(io.BytesIO(src_data)).convert("RGB")
-                        cv_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-                        h, w = cv_img.shape[:2]
-
-                        bubble_pairs = []
-                        all_bubble_bboxes = []
-                        for g_idx, group in enumerate(groups):
-                            ru = translations[g_idx].get("ru", "").strip() if g_idx < len(translations) else ""
-                            if not ru:
-                                continue
-                            xs, ys = [], []
-                            for r in group:
-                                bb = r.get("bbox", [])
-                                if not bb:
+                            bubble_pairs = []
+                            all_bubble_bboxes = []
+                            for g_idx, group in enumerate(groups):
+                                ru = translations[g_idx].get("ru", "").strip() if g_idx < len(translations) else ""
+                                if not ru:
                                     continue
-                                if isinstance(bb[0], (list, tuple)):
-                                    xs.extend(int(p[0]) for p in bb)
-                                    ys.extend(int(p[1]) for p in bb)
-                                else:
-                                    xs.extend([bb[0], bb[2]])
-                                    ys.extend([bb[1], bb[3]])
-                            if not xs:
+                                # Skip rendering SFX text (preserve original artwork)
+                                if translations[g_idx].get("sfx"):
+                                    continue
+                                xs, ys = [], []
+                                for r in group:
+                                    bb = r.get("bbox", [])
+                                    if not bb:
+                                        continue
+                                    if isinstance(bb[0], (list, tuple)):
+                                        xs.extend(int(p[0]) for p in bb)
+                                        ys.extend(int(p[1]) for p in bb)
+                                    else:
+                                        xs.extend([bb[0], bb[2]])
+                                        ys.extend([bb[1], bb[3]])
+                                if not xs:
+                                    continue
+                                text_bbox = (min(xs), min(ys), max(xs), max(ys))
+                                bubble_bbox, is_bubble = get_bubble_bounds(cv_img, text_bbox, w, h)
+                                all_bubble_bboxes.append(bubble_bbox)
+                                bubble_pairs.append((bubble_bbox, ru, is_bubble, text_bbox))
+
+                            if not bubble_pairs:
+                                async with results_lock:
+                                    rendered_results[idx] = src_data
+                                translated_queue.task_done()
                                 continue
-                            text_bbox = (min(xs), min(ys), max(xs), max(ys))
-                            bubble_bbox, is_bubble = get_bubble_bounds(cv_img, text_bbox, w, h)
-                            all_bubble_bboxes.append(bubble_bbox)
-                            bubble_pairs.append((bubble_bbox, ru, is_bubble, text_bbox))
 
-                        if not bubble_pairs:
-                            async with results_lock:
-                                rendered_results[idx] = src_data
-                            translated_queue.task_done()
-                            continue
+                            filled_img, self._bg_mask = self._fill_bubble_bg(cv_img, all_bubble_bboxes)
 
-                        filled_img, self._bg_mask = self._fill_bubble_bg(cv_img, all_bubble_bboxes)
+                            mask = build_mask(h, w, all_bubble_bboxes)
+                            for r in item["ocr_texts"]:
+                                poly = r.get("polygon")
+                                if poly:
+                                    pts = np.array([[(p[0], p[1]) for p in poly]], dtype=np.int32)
+                                    cv2.fillPoly(mask, pts, 255)
 
-                        mask = build_mask(h, w, all_bubble_bboxes)
-                        for r in item["ocr_texts"]:
-                            poly = r.get("polygon")
-                            if poly:
-                                pts = np.array([[(p[0], p[1]) for p in poly]], dtype=np.int32)
-                                cv2.fillPoly(mask, pts, 255)
+                            remaining = cv2.bitwise_and(mask, cv2.bitwise_not(self._bg_mask))
 
-                        remaining = cv2.bitwise_and(mask, cv2.bitwise_not(self._bg_mask))
-
-                        if cv2.countNonZero(remaining) == 0:
-                            clean_img = Image.fromarray(cv2.cvtColor(filled_img, cv2.COLOR_BGR2RGB))
-                        elif MODAL_AVAILABLE:
-                            _, img_bytes = cv2.imencode(".png", filled_img)
-                            modal_result = inpaint_batch_sync([img_bytes.tobytes()])
-                            if modal_result:
-                                modal_img = cv2.imdecode(np.frombuffer(modal_result[0], np.uint8), cv2.IMREAD_COLOR)
-                                clean_img = Image.fromarray(cv2.cvtColor(modal_img, cv2.COLOR_BGR2RGB))
-                                del modal_img
+                            if cv2.countNonZero(remaining) == 0:
+                                clean_img = Image.fromarray(cv2.cvtColor(filled_img, cv2.COLOR_BGR2RGB))
+                            elif MODAL_AVAILABLE:
+                                _, img_bytes = cv2.imencode(".png", filled_img)
+                                modal_result = inpaint_batch_sync([img_bytes.tobytes()])
+                                if modal_result:
+                                    modal_img = cv2.imdecode(np.frombuffer(modal_result[0], np.uint8), cv2.IMREAD_COLOR)
+                                    clean_img = Image.fromarray(cv2.cvtColor(modal_img, cv2.COLOR_BGR2RGB))
+                                    del modal_img
+                                else:
+                                    c = self.inpainter.inpaint(filled_img, remaining)
+                                    clean_img = Image.fromarray(cv2.cvtColor(c, cv2.COLOR_BGR2RGB))
+                                    del c
                             else:
                                 c = self.inpainter.inpaint(filled_img, remaining)
                                 clean_img = Image.fromarray(cv2.cvtColor(c, cv2.COLOR_BGR2RGB))
                                 del c
-                        else:
-                            c = self.inpainter.inpaint(filled_img, remaining)
-                            clean_img = Image.fromarray(cv2.cvtColor(c, cv2.COLOR_BGR2RGB))
-                            del c
-                        del cv_img, mask, filled_img
+                            del cv_img, mask, filled_img
 
-                        for bubble_bbox, text, is_bubble, text_bbox in bubble_pairs:
-                            try:
-                                # Classify caption (rectangular) vs dialogue (round bubble)
-                                font_type = "dialogue"
-                                if not is_bubble or _is_caption_region(cv_img, text_bbox):
-                                    font_type = "narration"
-                                else:
-                                    # Font-style matching: handwritten vs clean
-                                    bubble_mask_img = self._bg_mask
-                                    if bubble_mask_img is not None:
-                                        mask_pil = Image.fromarray(bubble_mask_img)
-                                        style = _classify_font_style(img, mask_pil, bubble_bbox)
-                                        if style == "narration":
+                            for bubble_bbox, text, is_bubble, text_bbox in bubble_pairs:
+                                try:
+                                    # Classify caption (rectangular) vs dialogue (round bubble)
+                                    font_type = "dialogue"
+                                    if not is_bubble or _is_caption_region(cv_img, text_bbox):
+                                        font_type = "narration"
+                                    else:
+                                        # Font-style matching: handwritten vs clean
+                                        bubble_mask_img = self._bg_mask
+                                        if _classify_font_style(img, bubble_mask_img, text_bbox) == "narration":
                                             font_type = "narration"
-                                clean_img = self.renderer.render_bubble_text(
-                                    clean_img, bubble_bbox, text, font_type=font_type, is_bubble=is_bubble,
-                                    original_img=img,
-                                )
-                            except Exception:
-                                continue
+                                    clean_img = self.renderer.render_bubble_text(
+                                        clean_img, bubble_bbox, text, font_type=font_type, is_bubble=is_bubble,
+                                        original_img=img,
+                                    )
+                                except Exception:
+                                    continue
 
-                        buf = io.BytesIO()
-                        clean_img.save(buf, format="PNG")
-                        out_data = buf.getvalue()
-                        del img, clean_img, buf
+                            buf = io.BytesIO()
+                            clean_img.save(buf, format="PNG")
+                            out_data = buf.getvalue()
+                            del img, clean_img, buf
 
-                        async with results_lock:
-                            rendered_results[idx] = out_data
-                    except Exception:
-                        async with results_lock:
-                            rendered_results[idx] = src_data
-                    translated_queue.task_done()
+                            async with results_lock:
+                                rendered_results[idx] = out_data
+                        except Exception:
+                            async with results_lock:
+                                rendered_results[idx] = src_data
+                        translated_queue.task_done()
 
-        # ---- Stage 5: Saver ----
-        async def stage_saver():
-            for i in range(total_pages):
-                # Wait for this page's result
-                while i not in rendered_results:
-                    await asyncio.sleep(0.05)
+            # ---- Stage 5: Saver ----
+            async def stage_saver():
+                for i in range(chunk_size):
+                    # Wait for this page's result
+                    while i not in rendered_results:
+                        await asyncio.sleep(0.05)
 
-                async with results_lock:
-                    out_data = rendered_results.pop(i)
+                    async with results_lock:
+                        out_data = rendered_results.pop(i)
 
-                out_path = work_dir / f"page_{i:03d}.png"
-                out_path.write_bytes(out_data)
-                await self._report(f"Сохранено стр. {i+1}/{total_pages}", 10 + int(80 * i / total_pages), 100)
+                    out_path = work_dir / f"{(chunk_start+i):03d}.png"
+                    out_path.write_bytes(out_data)
+                    await self._report(f"Сохранено стр. {chunk_start+i+1}/{total_pages}", 
+                                     10 + int(80 * (chunk_start+i) / total_pages), 100)
 
-            done_event.set()
+                done_event.set()
 
-        # Launch all stages
-        await self._report("Запуск конвейера...", 10, 100)
+            # Launch all stages
+            await self._report("Запуск конвейера...", 
+                             10 + int(80 * chunk_start / total_pages), 100)
 
-        stage_tasks = [
-            asyncio.create_task(stage_downloader()),
-            asyncio.create_task(stage_preprocessor()),
-            asyncio.create_task(stage_translator()),
-            asyncio.create_task(stage_inpainter_renderer()),
-            asyncio.create_task(stage_saver()),
-        ]
+            stage_tasks = [
+                asyncio.create_task(stage_downloader()),
+                asyncio.create_task(stage_preprocessor()),
+                asyncio.create_task(stage_translator()),
+                asyncio.create_task(stage_inpainter_renderer()),
+                asyncio.create_task(stage_saver()),
+            ]
 
-        # Wait for downloader to finish feeding
-        await stage_tasks[0]
+            # Wait for downloader to finish feeding
+            await stage_tasks[0]
 
-        # Wait for all queues to be processed
-        await raw_queue.join()
-        await ocr_queue.join()
-        await translated_queue.join()
-        await rendered_queue.join()
+            # Wait for all queues to be processed
+            await raw_queue.join()
+            await ocr_queue.join()
+            await translated_queue.join()
+            await rendered_queue.join()
 
-        # Wait for saver to finish
-        await done_event.wait()
-        await stage_tasks[4]
+            # Wait for saver to finish
+            await done_event.wait()
+            await stage_tasks[4]
 
-        # Collect final pages in order
-        final_paths = []
-        for i in range(total_pages):
-            path = work_dir / f"page_{i:03d}.png"
-            if path.exists():
-                final_paths.append(str(path))
+            # Collect final pages in order for this chunk
+            chunk_final_paths = []
+            for i in range(chunk_size):
+                path = work_dir / f"{(chunk_start+i):03d}.png"
+                if path.exists():
+                    chunk_final_paths.append(str(path))
+
+            all_final_paths.extend(chunk_final_paths)
+
+            # Clear memory between chunks
+            gc.collect()
+
+            # Clear translator context to prevent memory buildup
+            self.translator.clear_context()
+
+            # Report progress
+            await self._report(f"Чанк {chunk_start//CHUNK_SIZE + 1} завершен. Всего обработано: {chunk_end}/{total_pages} стр.", 
+                             10 + int(90 * chunk_end / total_pages), 100)
 
         # Сохраняем переводы в память
-        if final_paths:
-from cfg.memory import save_translations, _extract_speaker
+        if all_final_paths:
             current_chapter_translations = []
             for item in translated_queue._queue:
                 if item and not item.get("skip_render") and item.get("translations"):
@@ -690,9 +778,13 @@ from cfg.memory import save_translations, _extract_speaker
             await asyncio.to_thread(save_translations, mangadex_manga_id, mangadex_manga_id, chapter_number, current_chapter_translations)
 
         await self._report("Готово!", 100, 100)
-        return final_paths
+        if all_final_paths:
+            inc_metric("chapters_processed")
+            inc_metric("pages_processed", len(all_final_paths))
+        return all_final_paths
 
     async def close(self):
         await self.mangadex.close()
         await self.colab.close()
         await self.translator.close()
+        await self.inpainter.close()  # Ensure inpainter is closed

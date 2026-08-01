@@ -3,10 +3,136 @@ import aiohttp
 import httpx
 import os
 import logging
+import time
+import random
+from functools import wraps
 from .base import BaseSource, MangaResult, Chapter, Page
 
-log = logging.getLogger("manga_translator")
 
+def retry_async(max_attempts=3, base_delay=1.0, max_delay=10.0, jitter=True):
+    """
+    Retry decorator for async functions with exponential backoff.
+    
+    Args:
+        max_attempts: Maximum number of attempts
+        base_delay: Base delay in seconds
+        max_delay: Maximum delay in seconds
+        jitter: Whether to add random jitter to delay
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_attempts):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    if attempt == max_attempts - 1:
+                        break
+                    delay = min(base_delay * (2 ** attempt), max_delay)
+                    if jitter:
+                        delay *= (0.5 + random.random() * 0.5)
+                    await asyncio.sleep(delay)
+            
+            raise last_exception
+        return wrapper
+    return decorator
+
+class RateLimiter:
+    """Token bucket rate limiter for async functions."""
+    def __init__(self, rate: float, capacity: int = 1):
+        self.rate = rate  # tokens per second
+        self.capacity = capacity  # max tokens
+        self.tokens = capacity
+        self.last_refill = time.monotonic()
+        self._lock = asyncio.Lock()
+    
+    async def acquire(self):
+        async with self._lock:
+            now = time.monotonic()
+            elapsed = now - self.last_refill
+            self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
+            self.last_refill = now
+            if self.tokens >= 1:
+                self.tokens -= 1
+                return True
+            wait_time = (1 - self.tokens) / self.rate
+            return False
+    
+    async def wait(self):
+        while True:
+            if await self.acquire():
+                return
+            wait_time = (1 - self.tokens) / self.rate
+            await asyncio.sleep(wait_time)
+
+
+class CircuitBreaker:
+    """Circuit breaker pattern to prevent cascading failures."""
+    def __init__(self, max_failures: int = 3, reset_timeout: float = 30.0):
+        self.max_failures = max_failures
+        self.reset_timeout = reset_timeout
+        self.failures = 0
+        self.last_failure_time = 0
+        self.state = "CLOSED"
+        self._lock = asyncio.Lock()
+    
+    async def call(self, func, *args, **kwargs):
+        async with self._lock:
+            now = time.monotonic()
+            if self.state == "OPEN":
+                if now - self.last_failure_time > self.reset_timeout:
+                    self.state = "HALF-OPEN"
+                    self.failures = 0
+                else:
+                    raise Exception("Circuit breaker is open")
+        
+        try:
+            result = await func(*args, **kwargs)
+            async with self._lock:
+                if self.state == "HALF-OPEN":
+                    self.state = "CLOSED"
+                    self.failures = 0
+            return result
+        except Exception as e:
+            async with self._lock:
+                self.failures += 1
+                self.last_failure_time = time.monotonic()
+                if self.failures >= self.max_failures:
+                    self.state = "OPEN"
+            raise
+
+
+def circuit_breaker(max_failures: int = 3, reset_timeout: float = 30.0):
+    """Circuit breaker decorator for async functions."""
+    breaker = CircuitBreaker(max_failures, reset_timeout)
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            return await breaker.call(func, *args, **kwargs)
+        return wrapper
+    return decorator
+
+
+def timeout_async(timeout: float = 60.0):
+    """Timeout decorator for async functions."""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            return await asyncio.wait_for(func(*args, **kwargs), timeout=timeout)
+        return wrapper
+    return decorator
+
+
+# Rate limiter for proxy calls
+proxy_limiter = RateLimiter(rate=5, capacity=10)  # ~5 requests per second
+
+# Circuit breakers for proxy
+proxy_breaker = CircuitBreaker(max_failures=3, reset_timeout=30)
+
+
+log = logging.getLogger("manga_translator")
 
 def _get_proxy():
     return os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or os.environ.get("http_proxy") or os.environ.get("https_proxy")
@@ -69,7 +195,11 @@ class MangaDexSource(BaseSource):
                     await asyncio.sleep(2 ** attempt)
         return {}
 
+    @timeout_async(timeout=30.0)
+    @circuit_breaker(max_failures=3, reset_timeout=30)
+    @retry_async(max_attempts=3, base_delay=1.0, max_delay=10.0)
     async def _proxy_get(self, path: str, params: dict | None = None) -> dict:
+        await proxy_limiter.wait()
         if not self.proxy_url:
             return {}
         try:
@@ -81,7 +211,11 @@ class MangaDexSource(BaseSource):
             log.error("MangaDex proxy Error: %s", e)
             return {}
 
+    @timeout_async(timeout=60.0)
+    @circuit_breaker(max_failures=3, reset_timeout=30)
+    @retry_async(max_attempts=3, base_delay=1.0, max_delay=10.0)
     async def _proxy_download(self, url: str) -> bytes:
+        await proxy_limiter.wait()
         if not self.proxy_url:
             return b""
         try:

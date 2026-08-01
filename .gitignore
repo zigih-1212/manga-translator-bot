@@ -7,6 +7,9 @@ bot/err.txt
 bot/log.txt
 test_pipeline.log
 *.log
+*.db
+models/
+data/
 
 # Extras (not needed for Railway)
 .devcontainer/

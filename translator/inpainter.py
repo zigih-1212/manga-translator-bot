@@ -2,11 +2,44 @@ import os
 import threading
 import urllib.request
 import logging
+import time
+import random
+from functools import wraps
 from pathlib import Path
 import numpy as np
 import cv2
 
 log = logging.getLogger("manga_translator")
+
+
+def retry_sync(max_attempts=3, base_delay=1.0, max_delay=10.0, jitter=True):
+    """
+    Retry decorator for synchronous functions with exponential backoff.
+    
+    Args:
+        max_attempts: Maximum number of attempts
+        base_delay: Base delay in seconds
+        max_delay: Maximum delay in seconds
+        jitter: Whether to add random jitter to delay
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_attempts):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    if attempt == max_attempts - 1:
+                        break
+                    delay = min(base_delay * (2 ** attempt), max_delay)
+                    if jitter:
+                        delay *= (0.5 + random.random() * 0.5)
+                    time.sleep(delay)
+            raise last_exception
+        return wrapper
+    return decorator
 
 MODEL_DIR = Path(__file__).resolve().parent.parent / "models"
 MODEL_URLS = [
@@ -28,6 +61,7 @@ class LaMaInpainter:
         else:
             threading.Thread(target=self._download_async, daemon=True).start()
 
+    @retry_sync(max_attempts=3, base_delay=1.0, max_delay=10.0)
     def _download_async(self):
         for url in MODEL_URLS:
             try:

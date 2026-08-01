@@ -4,10 +4,143 @@ import os
 import hashlib
 import logging
 import httpx
+import time
+import random
+from functools import wraps
 from cfg import GLOSSARY, CONFIG, COLAB_URL, OPENROUTER_API_KEY, GROQ_API_KEY, GEMINI_API_KEY
 
 from cfg.memory import get_context as get_memory_context, get_glossary as get_memory_glossary, get_character_profiles
 from .log import log
+
+
+def retry_async(max_attempts=3, base_delay=1.0, max_delay=10.0, jitter=True):
+    """
+    Retry decorator for async functions with exponential backoff.
+    
+    Args:
+        max_attempts: Maximum number of attempts
+        base_delay: Base delay in seconds
+        max_delay: Maximum delay in seconds
+        jitter: Whether to add random jitter to delay
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_attempts):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    if attempt == max_attempts - 1:  # Last attempt
+                        break
+                    
+                    # Calculate delay with exponential backoff
+                    delay = min(base_delay * (2 ** attempt), max_delay)
+                    if jitter:
+                        delay *= (0.5 + random.random() * 0.5)  # 0.5 to 1.0 multiplier
+                    
+                    await asyncio.sleep(delay)
+            
+            raise last_exception
+        return wrapper
+    return decorator
+
+
+class RateLimiter:
+    """Token bucket rate limiter for async functions."""
+    def __init__(self, rate: float, capacity: int = 1):
+        self.rate = rate  # tokens per second
+        self.capacity = capacity  # max tokens
+        self.tokens = capacity
+        self.last_refill = time.monotonic()
+        self._lock = asyncio.Lock()
+    
+    async def acquire(self):
+        async with self._lock:
+            now = time.monotonic()
+            elapsed = now - self.last_refill
+            self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
+            self.last_refill = now
+            if self.tokens >= 1:
+                self.tokens -= 1
+                return True
+            wait_time = (1 - self.tokens) / self.rate
+            return False
+    
+    async def wait(self):
+        while True:
+            if await self.acquire():
+                return
+            wait_time = (1 - self.tokens) / self.rate
+            await asyncio.sleep(wait_time)
+
+
+class CircuitBreaker:
+    """Circuit breaker pattern to prevent cascading failures."""
+    def __init__(self, max_failures: int = 3, reset_timeout: float = 30.0):
+        self.max_failures = max_failures
+        self.reset_timeout = reset_timeout
+        self.failures = 0
+        self.last_failure_time = 0
+        self.state = "CLOSED"
+        self._lock = asyncio.Lock()
+    
+    async def call(self, func, *args, **kwargs):
+        async with self._lock:
+            now = time.monotonic()
+            if self.state == "OPEN":
+                if now - self.last_failure_time > self.reset_timeout:
+                    self.state = "HALF-OPEN"
+                    self.failures = 0
+                else:
+                    raise Exception("Circuit breaker is open")
+        
+        try:
+            result = await func(*args, **kwargs)
+            async with self._lock:
+                if self.state == "HALF-OPEN":
+                    self.state = "CLOSED"
+                    self.failures = 0
+            return result
+        except Exception as e:
+            async with self._lock:
+                self.failures += 1
+                self.last_failure_time = time.monotonic()
+                if self.failures >= self.max_failures:
+                    self.state = "OPEN"
+            raise
+
+
+def circuit_breaker(max_failures: int = 3, reset_timeout: float = 30.0):
+    """Circuit breaker decorator for async functions."""
+    breaker = CircuitBreaker(max_failures, reset_timeout)
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            return await breaker.call(func, *args, **kwargs)
+        return wrapper
+    return decorator
+
+
+def timeout_async(timeout: float = 60.0):
+    """Timeout decorator for async functions."""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            return await asyncio.wait_for(func(*args, **kwargs), timeout=timeout)
+        return wrapper
+    return decorator
+
+
+# Global circuit breakers
+openrouter_breaker = CircuitBreaker(max_failures=3, reset_timeout=30)
+colab_breaker = CircuitBreaker(max_failures=3, reset_timeout=30)
+gemini_breaker = CircuitBreaker(max_failures=3, reset_timeout=30)
+groq_breaker = CircuitBreaker(max_failures=3, reset_timeout=30)
+
+# Global bulkhead semaphores for limiting concurrent requests
+translation_semaphore = asyncio.Semaphore(3)  # Max 3 concurrent translations
 
 
 class TranslationCache:
@@ -221,8 +354,13 @@ class LLMTranslator:
             glossary["terms"][ko] = ru
         return glossary
 
+    @timeout_async(timeout=120.0)
+    @circuit_breaker(max_failures=3, reset_timeout=30)
+    @retry_async(max_attempts=3, base_delay=1.0, max_delay=10.0)
     async def _call_openrouter(self, korean_texts, english_texts, page_number, model, timeout=120.0) -> list[dict] | None:
-        sl = getattr(self, '_source_lang', 'ko')
+        async with translation_semaphore:
+            await openrouter_limiter.wait()
+            sl = getattr(self, '_source_lang', 'ko')
         prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary, source_lang=sl, character_profiles=self._character_profiles)
         payload = {
             "model": model,
@@ -252,7 +390,8 @@ class LLMTranslator:
                 return result
             return None
 
-async def _call_openrouter_free(self, korean_texts, english_texts, page_number) -> list[dict] | None:
+    @retry_async(max_attempts=3, base_delay=1.0, max_delay=10.0)
+    async def _call_openrouter_free(self, korean_texts, english_texts, page_number) -> list[dict] | None:
         try:
             return await asyncio.wait_for(
                 self._call_openrouter(korean_texts, english_texts, page_number, "openrouter/free"),
@@ -261,11 +400,17 @@ async def _call_openrouter_free(self, korean_texts, english_texts, page_number) 
         except asyncio.TimeoutError:
             return None
 
+    @retry_async(max_attempts=3, base_delay=1.0, max_delay=10.0)
     async def _call_openrouter_paid(self, korean_texts, english_texts, page_number) -> list[dict] | None:
         return await self._call_openrouter(korean_texts, english_texts, page_number, self.model)
 
+    @timeout_async(timeout=120.0)
+    @circuit_breaker(max_failures=3, reset_timeout=30)
+    @retry_async(max_attempts=3, base_delay=1.0, max_delay=10.0)
     async def _call_groq(self, korean_texts, english_texts, page_number) -> list[dict] | None:
-        sl = getattr(self, '_source_lang', 'ko')
+        async with translation_semaphore:
+            await groq_limiter.wait()
+            sl = getattr(self, '_source_lang', 'ko')
         prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary, source_lang=sl, character_profiles=self._character_profiles)
         payload = {
             "model": "llama-3.3-70b-versatile",
@@ -295,8 +440,13 @@ async def _call_openrouter_free(self, korean_texts, english_texts, page_number) 
                 return result
             return None
 
+    @timeout_async(timeout=60.0)
+    @circuit_breaker(max_failures=3, reset_timeout=30)
+    @retry_async(max_attempts=3, base_delay=1.0, max_delay=10.0)
     async def _call_gemini(self, korean_texts, english_texts, page_number) -> list[dict] | None:
-        sl = getattr(self, '_source_lang', 'ko')
+        async with translation_semaphore:
+            await gemini_limiter.wait()
+            sl = getattr(self, '_source_lang', 'ko')
         prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary, source_lang=sl, character_profiles=self._character_profiles)
         payload = {
             "contents": [
@@ -335,44 +485,53 @@ async def _call_openrouter_free(self, korean_texts, english_texts, page_number) 
                 return result
             return None
 
+    @timeout_async(timeout=60.0)
+    @circuit_breaker(max_failures=3, reset_timeout=30)
+    @retry_async(max_attempts=3, base_delay=1.0, max_delay=10.0)
     async def _call_colab(self, korean_texts, english_texts, page_number) -> list[dict] | None:
-        try:
-            payload = {
-                "korean_texts": korean_texts,
-                "english_texts": english_texts or [],
-                "page_number": page_number,
-                "model": self.model,
-                "temperature": self.temperature,
-                "context": {
-                    "glossary": self._build_glossary_dict(),
-                    "previous_pages": self.context_pages[-5:],
-                    "character_profiles": self._character_profiles,
-                },
-            }
-            resp = await self.colab_client.post(f"{self.colab_url}/translate", json=payload, timeout=60.0)
-            resp.raise_for_status()
-            data = resp.json()
-            return data.get("translations", [])
-        except Exception:
-            return None
-
-    async def _call_fallback(self, korean_texts, english_texts=None, page_number=0) -> list[dict]:
-        try:
-            from deep_translator import GoogleTranslator
-            sl = getattr(self, '_source_lang', 'ko')
-            deepl_src = {"ko": "ko", "en": "en", "ja": "ja", "zh": "zh-CN"}.get(sl, "ko")
-            translator = GoogleTranslator(source=deepl_src, target="ru")
-        except ImportError:
-            log.warning("deep-translator not installed, returning originals")
-            return [{"id": i + 1, "ru": text} for i, text in enumerate(korean_texts)]
-        results = []
-        for i, text in enumerate(korean_texts):
+        async with translation_semaphore:
+            await colab_limiter.wait()
             try:
-                translated = translator.translate(text)
-                results.append({"id": i + 1, "ru": translated})
+                payload = {
+                    "korean_texts": korean_texts,
+                    "english_texts": english_texts or [],
+                    "page_number": page_number,
+                    "model": self.model,
+                    "temperature": self.temperature,
+                    "context": {
+                        "glossary": self._build_glossary_dict(),
+                        "previous_pages": self.context_pages[-5:],
+                        "character_profiles": self._character_profiles,
+                    },
+                }
+                resp = await self.colab_client.post(f"{self.colab_url}/translate", json=payload, timeout=60.0)
+                resp.raise_for_status()
+                data = resp.json()
+                return data.get("translations", [])
             except Exception:
-                results.append({"id": i + 1, "ru": text})
-        return results
+                return None
+
+    @timeout_async(timeout=30.0)
+    @retry_async(max_attempts=3, base_delay=1.0, max_delay=10.0)
+    async def _call_fallback(self, korean_texts, english_texts=None, page_number=0) -> list[dict]:
+        async with translation_semaphore:
+            await openrouter_limiter.wait()  # Use same limiter as openrouter for fallback
+            try:
+                from deep_translator import GoogleTranslator
+                sl = getattr(self, '_source_lang', 'ko')
+                deepl_src = {"ko": "ko", "en": "en", "ja": "ja", "zh": "zh-CN"}.get(sl, "ko")
+                translator = GoogleTranslator(source=deepl_src, target="ru")
+            except ImportError:
+                log.warning("deep-translator not installed, returning originals")
+                return [{"id": i + 1, "ru": text} for i, text in enumerate(korean_texts)]
+            results = []
+            for i, text in enumerate(korean_texts):
+                try:
+                    translated = translator.translate(text)
+                    results.append({"id": i + 1, "ru": translated})
+                except Exception:
+                    results.append({"id": i + 1, "ru": text})
+            return results
 
     async def translate_page(self, korean_texts, english_texts=None, page_number=1, manga_id=None, chapter=None, source_lang="ko") -> list[dict]:
         if not korean_texts:
