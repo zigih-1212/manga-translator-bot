@@ -15,7 +15,7 @@ from translator.llm import LLMTranslator
 from translator.renderer import TextRenderer, _classify_font_style, _is_caption_region
 from translator.colab_client import ColabClient
 from translator.inpainter import LaMaInpainter
-from translator.bubbles import get_bubble_bounds, build_mask
+from translator.bubbles import get_bubble_bounds, build_mask, build_smart_mask
 from translator.modal_client import inpaint_batch_sync, MODAL_AVAILABLE
 from translator.sfx_detector import annotate_sfx, is_sfx_text
 from translator.preprocess import preprocess_page, sauvola
@@ -245,6 +245,40 @@ class TranslationPipeline:
             except Exception:
                 pass
         return filled, bg_mask
+
+    @staticmethod
+    def _postprocess_inpaint(img_bgr: np.ndarray, inpainted_bgr: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        """Blend inpainted region with original outside the mask; normalize brightness
+        of the inpainted area to match its immediate border pixels."""
+        result = inpainted_bgr.copy()
+        m = (mask > 127).astype(np.uint8)
+
+        # Dilate mask slightly to define border ring around inpainted region
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        border = cv2.dilate(m, kernel, iterations=2)
+        ring = border - m
+        if cv2.countNonZero(ring) > 0:
+            # Reference color from border of the ORIGINAL image
+            orig_lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+            inp_lab = cv2.cvtColor(inpainted_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+            ref_l = orig_lab[:, :, 0][ring > 0]
+            inp_l = inp_lab[:, :, 0][ring > 0]
+            if len(ref_l) > 10:
+                # Ratio to shift inpainted lightness toward border lightness
+                ratio = float(ref_l.mean()) / max(float(inp_l.mean()), 1.0)
+                ratio = np.clip(ratio, 0.7, 1.3)
+                inp_lab[:, :, 0] = np.clip(inp_lab[:, :, 0] * ratio, 0, 255)
+                corrected = cv2.cvtColor(inp_lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+                # Only apply corrected pixels inside the inpainted mask
+                inside = m > 0
+                result[inside] = corrected[inside]
+
+        # Soft-blend the seam (5px feather)
+        seam_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+        soft = cv2.dilate(m, seam_kernel, iterations=1)
+        soft = cv2.GaussianBlur(soft.astype(np.float32), (0, 0), 2.0)
+        soft = (soft / 255.0)[..., None]
+        return (result.astype(np.float32) * soft + img_bgr.astype(np.float32) * (1.0 - soft)).clip(0, 255).astype(np.uint8)
 
     @staticmethod
     def _auto_rotate(page_data: bytes) -> bytes:
@@ -651,6 +685,25 @@ class TranslationPipeline:
                             filled_img, self._bg_mask = self._fill_bubble_bg(cv_img, all_bubble_bboxes)
 
                             mask = build_mask(h, w, all_bubble_bboxes)
+                            # Smart mask: exactly cover text glyphs for cleaner inpaint
+                            try:
+                                text_boxes = []
+                                for r in item["ocr_texts"]:
+                                    bb = r.get("bbox", [])
+                                    if not bb:
+                                        continue
+                                    if isinstance(bb[0], (list, tuple)):
+                                        xs = [int(p[0]) for p in bb]
+                                        ys = [int(p[1]) for p in bb]
+                                        text_boxes.append((min(xs), min(ys), max(xs), max(ys)))
+                                    else:
+                                        text_boxes.append((int(bb[0]), int(bb[1]), int(bb[2]), int(bb[3])))
+                                if text_boxes:
+                                    smart = build_smart_mask(cv_img, text_boxes)
+                                    # Combine smart (precise) with rectangular (safe coverage)
+                                    mask = cv2.bitwise_or(mask, smart)
+                            except Exception:
+                                pass
                             for r in item["ocr_texts"]:
                                 poly = r.get("polygon")
                                 if poly:
@@ -661,22 +714,25 @@ class TranslationPipeline:
 
                             if cv2.countNonZero(remaining) == 0:
                                 clean_img = Image.fromarray(cv2.cvtColor(filled_img, cv2.COLOR_BGR2RGB))
-                            elif MODAL_AVAILABLE:
-                                _, img_bytes = cv2.imencode(".png", filled_img)
-                                modal_result = inpaint_batch_sync([img_bytes.tobytes()])
-                                if modal_result:
-                                    modal_img = cv2.imdecode(np.frombuffer(modal_result[0], np.uint8), cv2.IMREAD_COLOR)
-                                    clean_img = Image.fromarray(cv2.cvtColor(modal_img, cv2.COLOR_BGR2RGB))
-                                    del modal_img
-                                else:
-                                    c = self.inpainter.inpaint(filled_img, remaining)
-                                    clean_img = Image.fromarray(cv2.cvtColor(c, cv2.COLOR_BGR2RGB))
-                                    del c
                             else:
-                                c = self.inpainter.inpaint(filled_img, remaining)
-                                clean_img = Image.fromarray(cv2.cvtColor(c, cv2.COLOR_BGR2RGB))
-                                del c
-                            del cv_img, mask, filled_img
+                                inpainted_bgr = None
+                                if MODAL_AVAILABLE:
+                                    _, img_bytes = cv2.imencode(".png", filled_img)
+                                    # Pass the smart mask so GPU inpaint covers exactly the text
+                                    _, mask_bytes = cv2.imencode(".png", remaining)
+                                    modal_result = inpaint_batch_sync(
+                                        [img_bytes.tobytes()],
+                                        masks=[mask_bytes.tobytes()],
+                                    )
+                                    if modal_result:
+                                        inpainted_bgr = cv2.imdecode(np.frombuffer(modal_result[0], np.uint8), cv2.IMREAD_COLOR)
+                                if inpainted_bgr is None:
+                                    inpainted_bgr = self.inpainter.inpaint(filled_img, remaining)
+                                # Post-process: match inpainted lightness to bubble border
+                                inpainted_bgr = self._postprocess_inpaint(cv_img, inpainted_bgr, remaining)
+                                clean_img = Image.fromarray(cv2.cvtColor(inpainted_bgr, cv2.COLOR_BGR2RGB))
+                                del inpainted_bgr
+                            del mask, filled_img
 
                             for bubble_bbox, text, is_bubble, text_bbox in bubble_pairs:
                                 try:

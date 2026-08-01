@@ -250,12 +250,15 @@ except ImportError:
 MODAL_AVAILABLE = bool(MODAL_TOKEN_ID and MODAL_TOKEN_SECRET)
 
 
-def inpaint_batch_sync(images: list[bytes], dilation: int = 5, radius: int = 10) -> list[bytes] | None:
+def inpaint_batch_sync(images: list[bytes], dilation: int = 5, radius: int = 10, masks: list[bytes] | None = None) -> list[bytes] | None:
     if not MODAL_TOKEN_ID or not MODAL_TOKEN_SECRET:
         log.warning("Modal not configured (missing MODAL_TOKEN_ID/SECRET)")
         return None
 
     images_b64 = [base64.b64encode(img).decode() for img in images]
+    masks_b64 = None
+    if masks:
+        masks_b64 = [base64.b64encode(m).decode() if m else None for m in masks]
 
     # SDK path
     if _MODAL_SDK_AVAILABLE:
@@ -263,25 +266,27 @@ def inpaint_batch_sync(images: list[bytes], dilation: int = 5, radius: int = 10)
             import modal
             app_name = MODAL_APP_ID.split("/")[-1] if "/" in MODAL_APP_ID else "manga-inpaint"
             f = modal.Function.lookup(app_name, "inpaint_batch")
-            result_b64 = f.remote(images_b64, dilation=dilation, radius=radius)
+            result_b64 = f.remote(images_b64, dilation=dilation, radius=radius, masks_b64=masks_b64)
             log.info("Modal GPU inpaint OK (%d images via SDK)", len(images))
             return [base64.b64decode(b64) for b64 in result_b64]
         except Exception as e:
             log.warning("Modal SDK call failed: %s, trying REST API", e)
 
     # REST API path (no SDK needed)
-    return _inpaint_batch_rest_sync(images_b64, dilation, radius)
+    return _inpaint_batch_rest_sync(images_b64, dilation, radius, masks_b64)
 
 
 @timeout_sync(timeout=600.0)
 @circuit_breaker(max_failures=3, reset_timeout=30)
 @retry_sync(max_attempts=3, base_delay=1.0, max_delay=10.0)
-def _inpaint_batch_rest_sync(images_b64: list[str], dilation: int, radius: int) -> list[bytes] | None:
+def _inpaint_batch_rest_sync(images_b64: list[str], dilation: int, radius: int, masks_b64: list[str] | None = None) -> list[bytes] | None:
     """Retry wrapper for REST API call to Modal."""
     modal_sync_limiter.wait()
     try:
         import httpx
         payload = {"images_b64": images_b64, "dilation": dilation, "radius": radius}
+        if masks_b64:
+            payload["masks_b64"] = masks_b64
         with httpx.Client(timeout=600) as client:
             resp = client.post(
                 MODAL_APP_URL,
@@ -300,5 +305,5 @@ def _inpaint_batch_rest_sync(images_b64: list[str], dilation: int, radius: int) 
         raise
 
 
-async def inpaint_batch(images: list[bytes], dilation: int = 5, radius: int = 10) -> list[bytes] | None:
-    return inpaint_batch_sync(images, dilation, radius)
+async def inpaint_batch(images: list[bytes], dilation: int = 5, radius: int = 10, masks: list[bytes] | None = None) -> list[bytes] | None:
+    return inpaint_batch_sync(images, dilation, radius, masks)

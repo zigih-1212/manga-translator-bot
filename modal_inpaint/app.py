@@ -32,7 +32,7 @@ image = (
 
 
 @app.function(gpu="any", image=image, timeout=600, scaledown_window=60, volumes={"/models": models_volume})
-def inpaint_batch(images_b64: list[str], dilation: int = 5, radius: int = 10) -> list[str]:
+def inpaint_batch(images_b64: list[str], dilation: int = 5, radius: int = 10, masks_b64: list[str] | None = None) -> list[str]:
     import asyncio
     import onnxruntime
     import aiohttp
@@ -54,24 +54,35 @@ def inpaint_batch(images_b64: list[str], dilation: int = 5, radius: int = 10) ->
         "/models/lama.onnx", providers=["CPUExecutionProvider"]
     )
     results = []
-    for img_b64 in images_b64:
+    for i, img_b64 in enumerate(images_b64):
         img_bytes = base64.b64decode(img_b64)
         np_arr = np.frombuffer(img_bytes, np.uint8)
         img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
         h, w = img.shape[:2]
 
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        _, binary = cv2.threshold(gray, 220, 255, cv2.THRESH_BINARY_INV)
-        kernel = np.ones((3, 3), np.uint8)
-        dilated = cv2.dilate(binary, kernel, iterations=dilation)
-        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        mask = np.zeros((h, w), dtype=np.uint8)
-        for cnt in contours:
-            x, y, cw, ch = cv2.boundingRect(cnt)
-            if cw > 60 and ch > 40 and cw < w * 0.8 and ch < h * 0.8:
-                cv2.drawContours(mask, [cnt], -1, 255, -1)
+        # Use provided mask when available (smart mask from client)
+        if masks_b64 and i < len(masks_b64) and masks_b64[i]:
+            mask_bytes = base64.b64decode(masks_b64[i])
+            m_np = np.frombuffer(mask_bytes, np.uint8)
+            mask = cv2.imdecode(m_np, cv2.IMREAD_GRAYSCALE)
+            if mask is None or mask.shape[:2] != (h, w):
+                mask = None
+        else:
+            mask = None
 
-        mask = cv2.dilate(mask, np.ones((5, 5), np.uint8), iterations=2)
+        if mask is None:
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            _, binary = cv2.threshold(gray, 220, 255, cv2.THRESH_BINARY_INV)
+            kernel = np.ones((3, 3), np.uint8)
+            dilated = cv2.dilate(binary, kernel, iterations=dilation)
+            contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            mask = np.zeros((h, w), dtype=np.uint8)
+            for cnt in contours:
+                x, y, cw, ch = cv2.boundingRect(cnt)
+                if cw > 60 and ch > 40 and cw < w * 0.8 and ch < h * 0.8:
+                    cv2.drawContours(mask, [cnt], -1, 255, -1)
+            mask = cv2.dilate(mask, np.ones((5, 5), np.uint8), iterations=2)
+
         inpainted = _inpaint_lama(sess, img, mask)
 
         _, buf = cv2.imencode(".png", inpainted)
@@ -112,10 +123,11 @@ class InpaintRequest(BaseModel):
     images_b64: list[str]
     dilation: int = 5
     radius: int = 10
+    masks_b64: list[str] | None = None
 
 
 @app.function(image=image)
 @fastapi_endpoint(method="POST")
 def inpaint_api(request: InpaintRequest):
-    result = inpaint_batch.local(request.images_b64, request.dilation, request.radius)
+    result = inpaint_batch.local(request.images_b64, request.dilation, request.radius, request.masks_b64)
     return result
