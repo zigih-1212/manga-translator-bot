@@ -28,5 +28,22 @@
       "fonts/miracle_history/Miracle History.ttf",
       "fonts/mitshuka/Mitshuka_PERSONAL_USE_ONLY.otf"
     ]
+  },
+  "cyrillic": {
+    "default": "fonts/cyrillic/Montserrat-Bold.ttf",
+    "alternatives": [
+      "fonts/cyrillic/Rubik.ttf",
+      "fonts/cyrillic/Comfortaa.ttf",
+      "fonts/cyrillic/Nunito.ttf",
+      "fonts/cyrillic/Oswald.ttf",
+      "fonts/cyrillic/Fira-Sans.ttf",
+      "fonts/cyrillic/Lora.ttf",
+      "fonts/cyrillic/Alegreya.ttf",
+      "fonts/cyrillic/PT-Serif.ttf",
+      "fonts/cyrillic/DejaVuSans.ttf"
+    ],
+    "dialogue": "fonts/cyrillic/Montserrat-Bold.ttf",
+    "sfx": "fonts/cyrillic/Oswald.ttf",
+    "narration": "fonts/cyrillic/PT-Serif.ttf"
   }
 }

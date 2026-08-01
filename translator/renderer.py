@@ -254,6 +254,21 @@ class TextRenderer:
             if cached.exists():
                 return str(cached)
 
+        # Cyrillic text: prefer dedicated cyrillic fonts (bundled, verified support)
+        if needs_cyrillic:
+            cyr_cfg = self.font_config.get("cyrillic", {})
+            cyr_default = cyr_cfg.get(font_type) or cyr_cfg.get("default", "")
+            if cyr_default:
+                path = self.fonts_dir.parent / cyr_default
+                if path.exists() and self._supports_cyrillic(str(path)):
+                    self._font_cache[cache_key] = cyr_default
+                    return str(path)
+            for alt in cyr_cfg.get("alternatives", []):
+                path = self.fonts_dir.parent / alt
+                if path.exists() and self._supports_cyrillic(str(path)):
+                    self._font_cache[cache_key] = alt
+                    return str(path)
+
         cfg = self.font_config.get(font_type, {})
         default = cfg.get("default", "")
         if default:
