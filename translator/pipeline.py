@@ -767,8 +767,54 @@ class TranslationPipeline:
                             async with results_lock:
                                 rendered_results[idx] = out_data
                         except Exception:
-                            async with results_lock:
-                                rendered_results[idx] = src_data
+                            # Auto-retry: transient inpaint/render errors should not drop the page
+                            try:
+                                img = Image.open(io.BytesIO(src_data)).convert("RGB")
+                                cv_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+                                filled_img, self._bg_mask = self._fill_bubble_bg(cv_img, all_bubble_bboxes)
+                                mask = build_mask(h, w, all_bubble_bboxes)
+                                remaining = cv2.bitwise_and(mask, cv2.bitwise_not(self._bg_mask))
+                                if cv2.countNonZero(remaining) == 0:
+                                    clean_img = Image.fromarray(cv2.cvtColor(filled_img, cv2.COLOR_BGR2RGB))
+                                else:
+                                    inpainted_bgr = None
+                                    if MODAL_AVAILABLE:
+                                        _, img_bytes = cv2.imencode(".png", filled_img)
+                                        _, mask_bytes = cv2.imencode(".png", remaining)
+                                        modal_result = inpaint_batch_sync([img_bytes.tobytes()], masks=[mask_bytes.tobytes()])
+                                        if modal_result:
+                                            inpainted_bgr = cv2.imdecode(np.frombuffer(modal_result[0], np.uint8), cv2.IMREAD_COLOR)
+                                    if inpainted_bgr is None:
+                                        inpainted_bgr = self.inpainter.inpaint(filled_img, remaining)
+                                    inpainted_bgr = self._postprocess_inpaint(cv_img, inpainted_bgr, remaining)
+                                    clean_img = Image.fromarray(cv2.cvtColor(inpainted_bgr, cv2.COLOR_BGR2RGB))
+                                    del inpainted_bgr
+                                del mask, filled_img
+                                for bubble_bbox, text, is_bubble, text_bbox, angle in bubble_pairs:
+                                    try:
+                                        font_type = "dialogue"
+                                        if not is_bubble or _is_caption_region(cv_img, text_bbox):
+                                            font_type = "narration"
+                                        else:
+                                            bubble_mask_img = self._bg_mask
+                                            if _classify_font_style(img, bubble_mask_img, text_bbox) == "narration":
+                                                font_type = "narration"
+                                        clean_img = self.renderer.render_bubble_text(
+                                            clean_img, bubble_bbox, text, font_type=font_type, is_bubble=is_bubble,
+                                            original_img=img, angle=angle,
+                                        )
+                                    except Exception:
+                                        continue
+                                buf = io.BytesIO()
+                                clean_img.save(buf, format="PNG")
+                                out_data = buf.getvalue()
+                                del img, clean_img, buf
+                                async with results_lock:
+                                    rendered_results[idx] = out_data
+                            except Exception:
+                                record_error()
+                                async with results_lock:
+                                    rendered_results[idx] = src_data
                         translated_queue.task_done()
 
             # ---- Stage 5: Saver ----
