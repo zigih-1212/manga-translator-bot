@@ -3,6 +3,7 @@ import json
 import os
 import hashlib
 import logging
+import re
 import httpx
 import time
 import random
@@ -10,6 +11,7 @@ from functools import wraps
 from cfg import GLOSSARY, CONFIG, COLAB_URL, OPENROUTER_API_KEY, GROQ_API_KEY, GEMINI_API_KEY
 
 from cfg.memory import get_context as get_memory_context, get_glossary as get_memory_glossary, get_character_profiles
+from translator.rag import RAGIndex, load_translations_from_memory
 from .log import log
 
 
@@ -217,10 +219,12 @@ Respond ONLY with JSON array:
 [{{"id": 1, "ru": "translation"}}, {{"id": 2, "ru": "translation"}}, ...]"""
 
 
-def _build_prompt(korean_texts, english_texts, page_number, context, glossary, memory_context="", memory_glossary=None, character_profiles=None, source_lang="ko"):
+def _build_prompt(korean_texts, english_texts, page_number, context, glossary, memory_context="", memory_glossary=None, character_profiles=None, source_lang="ko", rag_context=""):
     parts = []
     if memory_context:
         parts.append("PREVIOUS CHAPTERS (translations of this manga from earlier chapters):\n" + memory_context)
+    if rag_context:
+        parts.append("SIMILAR PHRASES FROM EARLIER CHAPTERS (match style/terminology):\n" + rag_context)
     if context:
         parts.append("STORY SO FAR (Korean texts from previous pages for context):\n" + "\n".join(context[-5:]))
     parts.append(f"=== PAGE {page_number} ===")
@@ -281,6 +285,14 @@ def _parse_json_response(text: str) -> list[dict] | None:
     return None
 
 
+_UNTRANSLATED_RE = re.compile(r'[\uAC00-\uD7AF\u3040-\u30FF\u4E00-\u9FFF]')
+
+
+def _has_untranslated(text: str) -> bool:
+    """True if text still contains CJK/Korean script (not yet translated to RU)."""
+    return bool(_UNTRANSLATED_RE.search(text))
+
+
 class LLMTranslator:
     def __init__(self):
         self.colab_url = (COLAB_URL or "").rstrip("/")
@@ -292,6 +304,8 @@ class LLMTranslator:
         self._memory_context = ""
         self._memory_glossary = {}
         self._character_profiles = {}
+        self._rag_index = None
+        self._rag_context = ""
 
         if self.colab_url:
             self._test_colab()
@@ -354,6 +368,39 @@ class LLMTranslator:
             glossary["terms"][ko] = ru
         return glossary
 
+    def _ensure_rag_index(self, manga_id: str):
+        if self._rag_index is not None:
+            return self._rag_index
+        try:
+            texts = load_translations_from_memory(manga_id)
+            idx = RAGIndex()
+            idx.rebuild(texts)
+            self._rag_index = idx
+            if texts:
+                log.info("RAG index built for %s (%d phrases)", manga_id, len(texts))
+        except Exception as e:
+            log.warning("RAG index build failed: %s", e)
+            self._rag_index = RAGIndex()
+        return self._rag_index
+
+    def _build_rag_context(self, korean_texts: list[str], manga_id: str | None) -> str:
+        if not manga_id or not korean_texts:
+            return ""
+        try:
+            idx = self._ensure_rag_index(manga_id)
+            found: list[str] = []
+            seen = set()
+            for t in korean_texts:
+                for match, score in idx.search(t, k=2):
+                    if match not in seen and match != t:
+                        seen.add(match)
+                        found.append(f"  {match}")
+            if not found:
+                return ""
+            return "\n".join(found[:10])
+        except Exception:
+            return ""
+
     @timeout_async(timeout=120.0)
     @circuit_breaker(max_failures=3, reset_timeout=30)
     @retry_async(max_attempts=3, base_delay=1.0, max_delay=10.0)
@@ -361,7 +408,7 @@ class LLMTranslator:
         async with translation_semaphore:
             await openrouter_limiter.wait()
             sl = getattr(self, '_source_lang', 'ko')
-        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary, source_lang=sl, character_profiles=self._character_profiles)
+        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary, source_lang=sl, character_profiles=self._character_profiles, rag_context=getattr(self, '_rag_context', ''))
         payload = {
             "model": model,
             "messages": [
@@ -411,7 +458,7 @@ class LLMTranslator:
         async with translation_semaphore:
             await groq_limiter.wait()
             sl = getattr(self, '_source_lang', 'ko')
-        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary, source_lang=sl, character_profiles=self._character_profiles)
+        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary, source_lang=sl, character_profiles=self._character_profiles, rag_context=getattr(self, '_rag_context', ''))
         payload = {
             "model": "llama-3.3-70b-versatile",
             "messages": [
@@ -447,7 +494,7 @@ class LLMTranslator:
         async with translation_semaphore:
             await gemini_limiter.wait()
             sl = getattr(self, '_source_lang', 'ko')
-        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary, source_lang=sl, character_profiles=self._character_profiles)
+        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(), self._memory_context, self._memory_glossary, source_lang=sl, character_profiles=self._character_profiles, rag_context=getattr(self, '_rag_context', ''))
         payload = {
             "contents": [
                 {
@@ -541,6 +588,7 @@ class LLMTranslator:
         self._memory_context = get_memory_context(manga_id) if manga_id else ""
         self._memory_glossary = get_memory_glossary(manga_id) if manga_id else {}
         self._character_profiles = get_character_profiles(manga_id) if manga_id else {}
+        self._rag_context = self._build_rag_context(korean_texts, manga_id)
 
         cached = TranslationCache.get(korean_texts, source_lang)
         if cached is not None:
@@ -548,13 +596,22 @@ class LLMTranslator:
             self.add_context(korean_texts)
             return cached
 
+        # Hard glossary pre-replace: inject known RU terms inline as hints
+        hard_glossary = self._build_glossary_dict()
+        prompt_texts = self._apply_hard_glossary(korean_texts, hard_glossary)
+
         for name, call_fn in self._providers:
             try:
-                result = await call_fn(korean_texts, english_texts or [], page_number)
+                if name == "deep-translator":
+                    result = await call_fn(korean_texts, english_texts or [], page_number)
+                else:
+                    result = await call_fn(prompt_texts, english_texts or [], page_number)
                 if result is None:
                     log.warning("%s → rate limited, next...", name)
                     continue
                 self.add_context(korean_texts)
+                result = self._apply_hard_glossary_cleanup(result)
+                result = await self._self_correct(korean_texts, result, source_lang)
                 for i, ko in enumerate(korean_texts):
                     if i < len(result):
                         result[i]["ko"] = ko
@@ -581,6 +638,78 @@ class LLMTranslator:
             except Exception:
                 continue
         return korean_sfx
+
+    async def _self_correct(self, korean_texts, result: list[dict], source_lang: str) -> list[dict]:
+        """Retry translation for bubbles the LLM left untranslated."""
+        untranslated_idx = []
+        for i, entry in enumerate(result):
+            ru = (entry.get("ru") or "").strip()
+            if not ru or _has_untranslated(ru):
+                untranslated_idx.append(i)
+
+        if not untranslated_idx:
+            return result
+
+        log.warning("Self-correction: %d/%d bubbles untranslated, retrying", len(untranslated_idx), len(result))
+
+        # Filter to problematic texts
+        problems = [korean_texts[i] for i in untranslated_idx]
+
+        for name, call_fn in self._providers:
+            if name == "deep-translator":
+                continue
+            try:
+                fixed = await call_fn(problems, [], 0)
+                if not fixed:
+                    continue
+                ok = True
+                for j, i in enumerate(untranslated_idx):
+                    ru = (fixed[j].get("ru") or "").strip() if j < len(fixed) else ""
+                    if not ru or _has_untranslated(ru):
+                        ok = False
+                        continue
+                    result[i]["ru"] = ru
+                if ok:
+                    break
+            except Exception:
+                continue
+
+        return result
+
+    def _apply_hard_glossary(self, texts: list[str], glossary: dict) -> list[str]:
+        """Hard-replace exact glossary terms in source text with bracketed RU hints.
+
+        This guarantees consistent terminology even if the LLM misses the prompt.
+        The RU translation is embedded inline as a hint, then extracted back after
+        the LLM returns its JSON.
+        """
+        terms = {}
+        if glossary:
+            for section in ("characters", "terms"):
+                for ko, ru in glossary.get(section, {}).items():
+                    if ko and ru:
+                        terms[ko] = ru
+        if not terms:
+            return list(texts)
+
+        replaced = []
+        for t in texts:
+            out = t
+            for ko, ru in sorted(terms.items(), key=lambda kv: -len(kv[0])):
+                if ko in out:
+                    out = out.replace(ko, f"{ko}（{ru}）")
+            replaced.append(out)
+        return replaced
+
+    def _apply_hard_glossary_cleanup(self, result: list[dict]) -> list[dict]:
+        """Remove injected RU hints from LLM output (括号 format)."""
+        for entry in result:
+            ru = entry.get("ru", "")
+            if not ru:
+                continue
+            cleaned = re.sub(r'（[^）]*）', '', ru).strip()
+            entry["ru"] = cleaned or ru
+        return result
 
     def _apply_post_replace(self, result: list[dict]) -> list[dict]:
         glossary = CONFIG.get("translation", {}).get("post_replace", {})
