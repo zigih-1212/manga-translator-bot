@@ -12,7 +12,7 @@ from typing import Optional, List, Dict, Any
 
 from sources.mangadex import MangaDexSource
 from translator.llm import LLMTranslator
-from translator.renderer import TextRenderer, _classify_font_style, _is_caption_region
+from translator.renderer import TextRenderer, _classify_font_style, _is_caption_region, _polygon_angle
 from translator.colab_client import ColabClient
 from translator.inpainter import LaMaInpainter
 from translator.bubbles import get_bubble_bounds, build_mask, build_smart_mask
@@ -673,8 +673,15 @@ class TranslationPipeline:
                                     continue
                                 text_bbox = (min(xs), min(ys), max(xs), max(ys))
                                 bubble_bbox, is_bubble = get_bubble_bounds(cv_img, text_bbox, w, h)
+                                # Estimate text skew from OCR polygons for warp-rendering
+                                angle = 0.0
+                                for r in group:
+                                    poly = r.get("polygon")
+                                    if poly:
+                                        angle = _polygon_angle(poly)
+                                        break
                                 all_bubble_bboxes.append(bubble_bbox)
-                                bubble_pairs.append((bubble_bbox, ru, is_bubble, text_bbox))
+                                bubble_pairs.append((bubble_bbox, ru, is_bubble, text_bbox, angle))
 
                             if not bubble_pairs:
                                 async with results_lock:
@@ -734,7 +741,7 @@ class TranslationPipeline:
                                 del inpainted_bgr
                             del mask, filled_img
 
-                            for bubble_bbox, text, is_bubble, text_bbox in bubble_pairs:
+                            for bubble_bbox, text, is_bubble, text_bbox, angle in bubble_pairs:
                                 try:
                                     # Classify caption (rectangular) vs dialogue (round bubble)
                                     font_type = "dialogue"
@@ -747,7 +754,7 @@ class TranslationPipeline:
                                             font_type = "narration"
                                     clean_img = self.renderer.render_bubble_text(
                                         clean_img, bubble_bbox, text, font_type=font_type, is_bubble=is_bubble,
-                                        original_img=img,
+                                        original_img=img, angle=angle,
                                     )
                                 except Exception:
                                     continue

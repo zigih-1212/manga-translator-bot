@@ -425,6 +425,7 @@ class TextRenderer:
         outline_width: int = 2,
         is_bubble: bool = True,
         original_img: Image.Image | None = None,
+        angle: float = 0.0,
     ) -> Image.Image:
         img = img.copy()
         # Extract actual text color from original
@@ -457,16 +458,26 @@ class TextRenderer:
         line_height = font.getbbox("Аg")[3] - font.getbbox("Аg")[1] + 2
         total_height = line_height * len(lines)
         start_y = bbox[1] + (bbox[3] - bbox[1] - total_height) // 2
+        text_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        text_draw = ImageDraw.Draw(text_layer)
         for i, line in enumerate(lines):
-            bbox_line = ImageDraw.Draw(img).textbbox((0, 0), line, font=font)
+            bbox_line = text_draw.textbbox((0, 0), line, font=font)
             lw = bbox_line[2] - bbox_line[0]
             lx = bbox[0] + (bbox[2] - bbox[0] - lw) // 2
             ly = start_y + i * line_height
             for dx in range(-outline_width, outline_width + 1):
                 for dy in range(-outline_width, outline_width + 1):
                     if dx != 0 or dy != 0:
-                        ImageDraw.Draw(img).text((lx + dx, ly + dy), line, font=font, fill=outline_color)
-            ImageDraw.Draw(img).text((lx, ly), line, font=font, fill=font_color)
+                        text_draw.text((lx + dx, ly + dy), line, font=font, fill=outline_color)
+            text_draw.text((lx, ly), line, font=font, fill=font_color)
+
+        if angle:
+            cx = (bbox[0] + bbox[2]) // 2
+            cy = (bbox[1] + bbox[3]) // 2
+            text_layer = text_layer.rotate(angle, resample=Image.Resampling.BICUBIC, center=(cx, cy), expand=False)
+            img = Image.alpha_composite(img.convert("RGBA"), text_layer).convert("RGB")
+        else:
+            img = Image.alpha_composite(img.convert("RGBA"), text_layer).convert("RGB")
         return img
 
     def render_text_in_bubble_shape(
@@ -538,6 +549,68 @@ class TextRenderer:
             img = self._colorize_inpainted(original_img, img, bbox, fallback_color=(240, 240, 240))
         return img
 
+    def render_vertical_text(
+        self,
+        img: Image.Image,
+        bbox: tuple[int, int, int, int],
+        text: str,
+        font_type: str = "dialogue",
+        outline_width: int = 2,
+        original_img: Image.Image | None = None,
+    ) -> Image.Image:
+        """Render Japanese text vertically (one character per line, top-to-bottom)."""
+        img = img.copy()
+        x1, y1, x2, y2 = bbox
+        bw = x2 - x1
+        bh = y2 - y1
+
+        font_path = self._get_font_path(font_type, text)
+        # Fit font size: width determines char size for vertical layout
+        font = None
+        pad = 6
+        for size in range(48, 8, -1):
+            try:
+                f = ImageFont.truetype(font_path, size)
+            except Exception:
+                f = ImageFont.load_default()
+            ch_bbox = f.getbbox("ア")
+            ch_w = ch_bbox[2] - ch_bbox[0]
+            ch_h = ch_bbox[3] - ch_bbox[1]
+            total_h = ch_h * len(text)
+            if ch_w <= bw - pad * 2 and total_h <= bh - pad * 2:
+                font = f
+                break
+        if font is None:
+            font = ImageFont.load_default()
+
+        # Text color extraction (reuse bubble logic)
+        brightness = self._estimate_brightness(img, bbox)
+        if brightness < 128:
+            font_color, outline_color = "white", "black"
+        else:
+            font_color, outline_color = "black", "white"
+
+        text_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        text_draw = ImageDraw.Draw(text_layer)
+        chars = [ch for ch in text if ch.strip() or ch == " "]
+        ch_h = font.getbbox("ア")[3] - font.getbbox("ア")[1] + 2
+        total_h = ch_h * len(chars)
+        start_y = y1 + (bh - total_h) // 2
+        lx = x1 + (bw - (font.getbbox("ア")[2] - font.getbbox("ア")[0])) // 2
+        for i, ch in enumerate(chars):
+            ly = start_y + i * ch_h
+            for dx in range(-outline_width, outline_width + 1):
+                for dy in range(-outline_width, outline_width + 1):
+                    if dx != 0 or dy != 0:
+                        text_draw.text((lx + dx, ly + dy), ch, font=font, fill=outline_color + (255,))
+            text_draw.text((lx, ly), ch, font=font, fill=font_color + (255,))
+
+        img = img.convert("RGBA")
+        img = Image.alpha_composite(img, text_layer).convert("RGB")
+        if original_img is not None:
+            img = self._colorize_inpainted(original_img, img, bbox, fallback_color=(240, 240, 240))
+        return img
+
     def render_sfx(
         self,
         img: Image.Image,
@@ -565,3 +638,31 @@ class TextRenderer:
                     draw.text((tx + dx, ty + dy), text, font=font, fill=outline_color)
         draw.text((tx, ty), text, font=font, fill=font_color)
         return img
+
+
+def _polygon_angle(poly: list) -> float:
+    """
+    Estimate the skew (rotation) angle of a text polygon in degrees.
+
+    Computes the minimum-area rectangle of the polygon and returns the
+    rotation angle of its long axis (clamped to [-45, 45]).
+    """
+    import numpy as np
+    pts = np.array([(float(p[0]), float(p[1])) for p in poly], dtype=np.float32)
+    if len(pts) < 3:
+        return 0.0
+    try:
+        rect = cv2.minAreaRect(pts)
+        angle = rect[2]
+        # minAreaRect angle semantics: for near-square it flips; normalize to long axis
+        w, h = rect[1]
+        if w < h:
+            angle += 90.0
+        if angle > 45.0:
+            angle -= 90.0
+        if angle < -45.0:
+            angle += 90.0
+        return float(angle)
+    except Exception:
+        return 0.0
+
