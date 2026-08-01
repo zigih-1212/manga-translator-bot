@@ -13,11 +13,13 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.types import FSInputFile
 from cfg import TG_BOT_TOKEN, TG_PROXY_URL, COLAB_URL, CONFIG, save_config, validate_config
-from bot.handlers import start_router, titles_router, translate_router, status_router, manga_info_router
+from bot.handlers import start_router, titles_router, translate_router, status_router, manga_info_router, manga_translate_router
 from sources.mangadex import MangaDexSource
 from translator.pipeline import TranslationPipeline
 from translator.health import start_health_server, stop_health_server, mark_bot_started, record_error
 from cfg.db import TranslationQueueDB
+
+bot: Bot | None = None
 
 HTTP_PROXY = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")
 
@@ -264,6 +266,7 @@ async def startup_translate(bot: Bot):
 
 
 async def main():
+    global bot
     bot = Bot(token=TG_BOT_TOKEN, session=build_session(), default=DefaultBotProperties(parse_mode=None))
     dp = Dispatcher()
 
@@ -272,6 +275,7 @@ async def main():
     dp.include_router(translate_router)
     dp.include_router(status_router)
     dp.include_router(manga_info_router)
+    dp.include_router(manga_translate_router)
 
     logger.info("Bot starting...")
     validate_config()

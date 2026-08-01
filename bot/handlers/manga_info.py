@@ -16,11 +16,11 @@ class MangaInfoStates(StatesGroup):
     choosing = State()
 
 
-@router.message(Command("manga"))
+@router.message(Command("manga_info"))
 async def cmd_manga(message: Message, state: FSMContext):
-    query = message.text.removeprefix("/manga").strip()
+    query = message.text.removeprefix("/manga_info").strip()
     if not query:
-        await message.answer("Напиши название после /manga, например:\n/manga One Piece")
+        await message.answer("Напиши название после /manga_info, например:\n/manga_info One Piece")
         return
     await message.answer(f"Ищу «{query}»...")
     try:

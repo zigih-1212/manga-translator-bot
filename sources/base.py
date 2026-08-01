@@ -12,6 +12,7 @@ class MangaResult:
     year: int | None
     cover_url: str | None
     source: str
+    original_language: str = "ko"
 
 
 @dataclass

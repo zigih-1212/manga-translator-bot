@@ -258,6 +258,7 @@ class MangaDexSource(BaseSource):
                 year=attrs.get("year"),
                 cover_url=cover_url,
                 source="mangadex",
+                original_language=attrs.get("originalLanguage", "ko"),
             ))
         return results
 
