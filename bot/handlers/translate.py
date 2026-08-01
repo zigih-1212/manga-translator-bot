@@ -202,16 +202,12 @@ async def check_chapters(callback: CallbackQuery):
             f"🌐 Язык: {source_lang}\n"
             f"📖 Найдено глав: <b>{len(chapters)}</b> (уникальных номеров: <b>{len(numbers)}</b>)\n"
             f"📐 Диапазон: <code>{numbers[0]:.0f}</code> — <code>{numbers[-1]:.0f}</code>\n"
-            f"✅ В очереди: <b>{db.get_pending_count(manga_id)}</b> ожидают, "
+f"✅ В очереди: <b>{db.get_pending_count(manga_id)}</b> ожидают, "
             f"<b>{db.get_processing_count(manga_id)}</b> в работе",
             parse_mode="HTML",
         )
     except Exception as e:
         await callback.message.answer(f"Ошибка проверки глав: {e}")
-
-
-except Exception as e:
-            await callback.message.answer(f"Ошибка проверки глав: {e}")
 
 
 @router.message(Command("debug_chapters"))
