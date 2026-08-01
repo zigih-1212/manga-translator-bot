@@ -12,6 +12,7 @@ from cfg import GLOSSARY, CONFIG, COLAB_URL, OPENROUTER_API_KEY, GROQ_API_KEY, G
 
 from cfg.memory import get_context as get_memory_context, get_glossary as get_memory_glossary, get_character_profiles
 from translator.rag import RAGIndex, load_translations_from_memory
+from translator.validator import validate_translation, fix_translation
 from .log import log
 
 
@@ -612,6 +613,8 @@ class LLMTranslator:
                 self.add_context(korean_texts)
                 result = self._apply_hard_glossary_cleanup(result)
                 result = await self._self_correct(korean_texts, result, source_lang)
+                # Post-validation: fix trivial issues, else fallback to deep-translator
+                result = self._validate_and_fix(korean_texts, result, source_lang)
                 for i, ko in enumerate(korean_texts):
                     if i < len(result):
                         result[i]["ko"] = ko
@@ -674,6 +677,24 @@ class LLMTranslator:
             except Exception:
                 continue
 
+        return result
+
+    def _validate_and_fix(self, korean_texts, result: list[dict], source_lang: str) -> list[dict]:
+        """Validate each translation; apply trivial fixes and mark unfixable ones."""
+        for i, entry in enumerate(result):
+            src = korean_texts[i] if i < len(korean_texts) else ""
+            ru = (entry.get("ru") or "").strip()
+            if not ru:
+                continue
+            check = validate_translation(src, ru, source_lang)
+            if check["ok"]:
+                continue
+            fixed = fix_translation(src, ru, source_lang)
+            if fixed is not None and validate_translation(src, fixed, source_lang)["ok"]:
+                log.info("Validator fixed bubble %d: %r -> %r", i, ru, fixed)
+                entry["ru"] = fixed
+            elif any(x in check["issues"] for x in ("untranslated-script", "korean-left", "empty")):
+                log.warning("Validator: bubble %d has issues %s, leaving as-is", i, check["issues"])
         return result
 
     def _apply_hard_glossary(self, texts: list[str], glossary: dict) -> list[str]:
