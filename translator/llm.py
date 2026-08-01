@@ -13,6 +13,7 @@ from cfg import GLOSSARY, CONFIG, COLAB_URL, OPENROUTER_API_KEY, GROQ_API_KEY, G
 from cfg.memory import get_context as get_memory_context, get_glossary as get_memory_glossary, get_character_profiles
 from translator.rag import RAGIndex, load_translations_from_memory
 from translator.validator import validate_translation, fix_translation
+from translator.health import record_self_correction, record_validator_fix
 from .log import log
 
 
@@ -654,7 +655,7 @@ class LLMTranslator:
             return result
 
         log.warning("Self-correction: %d/%d bubbles untranslated, retrying", len(untranslated_idx), len(result))
-
+        record_self_correction()
         # Filter to problematic texts
         problems = [korean_texts[i] for i in untranslated_idx]
 
@@ -692,6 +693,7 @@ class LLMTranslator:
             fixed = fix_translation(src, ru, source_lang)
             if fixed is not None and validate_translation(src, fixed, source_lang)["ok"]:
                 log.info("Validator fixed bubble %d: %r -> %r", i, ru, fixed)
+                record_validator_fix()
                 entry["ru"] = fixed
             elif any(x in check["issues"] for x in ("untranslated-script", "korean-left", "empty")):
                 log.warning("Validator: bubble %d has issues %s, leaving as-is", i, check["issues"])

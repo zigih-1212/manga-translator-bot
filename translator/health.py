@@ -3,10 +3,12 @@ import json
 import os
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from aiohttp import web
 
 from .log import log
+from cfg import DATA_DIR
 
 HEALTH_PORT = int(os.environ.get("HEALTH_PORT", "8080"))
 
@@ -14,6 +16,7 @@ START_TIME = time.monotonic()
 _bot_uptime_start = None
 _last_activity = time.monotonic()
 _monitor_task = None
+_report_task = None
 _alert_cooldown_until = 0.0
 _metrics = {
     "chapters_processed": 0,
@@ -23,7 +26,13 @@ _metrics = {
     "llm_fail": 0,
     "ocr_success": 0,
     "ocr_fail": 0,
+    "self_corrections": 0,
+    "validator_fixes": 0,
 }
+
+_METRICS_JSON = DATA_DIR / "metrics.json"
+_REPORT_TAG = "metrics_report"
+_REPORT_INTERVAL = int(os.environ.get("METRICS_REPORT_INTERVAL", "3600"))
 
 
 def record_activity():
@@ -51,9 +60,34 @@ def record_error():
     record_activity()
 
 
+def record_self_correction():
+    inc_metric("self_corrections")
+    record_activity()
+
+
+def record_validator_fix():
+    inc_metric("validator_fixes")
+    record_activity()
+
+
 def mark_bot_started():
     global _bot_uptime_start
     _bot_uptime_start = time.monotonic()
+
+
+def _persist_metrics():
+    """Save current metrics snapshot to DATA_DIR/metrics.json (survives restarts)."""
+    try:
+        data = {
+            "saved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "metrics": dict(_metrics),
+            "uptime_seconds": round(time.monotonic() - START_TIME, 1),
+        }
+        _METRICS_JSON.parent.mkdir(parents=True, exist_ok=True)
+        with open(_METRICS_JSON, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        log.error("Failed to persist metrics: %s", e)
 
 
 def _health_payload() -> dict:
@@ -97,19 +131,23 @@ async def start_health_server(port: int = HEALTH_PORT):
     site = web.TCPSite(runner, host="0.0.0.0", port=port)
     await site.start()
     log.info("Health server listening on 0.0.0.0:%s", port)
-    global _monitor_task
+    global _monitor_task, _report_task
     if _monitor_task is None:
         _monitor_task = asyncio.create_task(_monitor_loop())
+    if _report_task is None:
+        _report_task = asyncio.create_task(_persist_loop())
     return runner
 
 
 async def stop_health_server(runner):
     if runner:
         await runner.cleanup()
-    global _monitor_task
-    if _monitor_task:
-        _monitor_task.cancel()
-        _monitor_task = None
+    global _monitor_task, _report_task
+    for task_name in ("_monitor_task", "_report_task"):
+        task = globals()[task_name]
+        if task:
+            task.cancel()
+            globals()[task_name] = None
 
 
 async def _monitor_loop(interval: float = 60.0):
@@ -145,3 +183,42 @@ async def _monitor_loop(interval: float = 60.0):
                 ))
         except Exception as e:
             log.error("Monitor loop error: %s", e)
+
+
+async def _persist_loop(interval: float = 300.0):
+    """Periodically dump metrics to JSON + send a periodic Telegram summary."""
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            _persist_metrics()
+        except Exception as e:
+            log.error("Persist loop error: %s", e)
+        if _REPORT_INTERVAL > 0:
+            try:
+                await _send_periodic_report()
+            except Exception as e:
+                log.error("Report loop error: %s", e)
+
+
+def _format_duration(seconds: float) -> str:
+    seconds = int(seconds)
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}ч {m}м"
+    if m:
+        return f"{m}м {s}с"
+    return f"{s}с"
+
+
+async def _send_periodic_report():
+    """Send a JSON-style summary to Telegram with rate-limit tag."""
+    from .alerts import send_alert
+    uptime = _format_duration(time.monotonic() - START_TIME)
+    payload = {
+        "uptime": uptime,
+        "metrics": dict(_metrics),
+    }
+    msg = "📊 Метрики бота:\n" + json.dumps(payload, ensure_ascii=False, indent=2)
+    # send_alert applies per-tag cooldown; force=True to skip cooldown for the scheduled report
+    await send_alert(msg, tag=_REPORT_TAG, force=True)
