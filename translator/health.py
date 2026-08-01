@@ -32,7 +32,7 @@ _metrics = {
 
 _METRICS_JSON = DATA_DIR / "metrics.json"
 _REPORT_TAG = "metrics_report"
-_REPORT_INTERVAL = int(os.environ.get("METRICS_REPORT_INTERVAL", "3600"))
+_REPORT_INTERVAL = int(os.environ.get("METRICS_REPORT_INTERVAL", "21600"))
 
 
 def record_activity():

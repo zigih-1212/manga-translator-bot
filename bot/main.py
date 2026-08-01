@@ -189,35 +189,67 @@ async def scheduler_loop(bot: Bot):
             logger.exception(f"auto: ошибка: {e}")
             record_error()
 
-        # Проверка и запуск задач из очереди
-        logger.info("auto: проверка очереди переводов...")
-        db = TranslationQueueDB()
-        pending_tasks = db.get_pending_tasks()
-        if pending_tasks:
-            logger.info(f"Найдено {len(pending_tasks)} задач в очереди.")
-            for task_entry in pending_tasks:
-                try:
-                    logger.info(f"Запускаю перевод из очереди: {task_entry['manga_id']} - {task_entry['chapter_number']}")
-                    db.update_task_status(task_entry['manga_id'], task_entry['chapter_number'], 'processing')
-                    pipeline = TranslationPipeline()
-                    page_paths = await pipeline.process_chapter(
-                        mangadex_manga_id=task_entry['manga_id'],
-                        chapter_number=task_entry['chapter_number'],
-                        source_lang=task_entry['source_lang'],
-                        target_lang="en",
-                    )
-                    await pipeline.close()
-                    if page_paths:
-                        db.update_task_status(task_entry['manga_id'], task_entry['chapter_number'], 'completed')
-                        # Здесь можно добавить отправку в Telegram или публикацию
-                        logger.info(f"Глава {task_entry['chapter_number']} для {task_entry['manga_id']} переведена.")
-                    else:
-                        db.update_task_status(task_entry['manga_id'], task_entry['chapter_number'], 'failed', "Нет страниц или не удалось перевести")
-                except Exception as e:
-                    logger.exception(f"Ошибка при переводе из очереди: {e}")
-                    record_error()
-                    db.update_task_status(task_entry['manga_id'], task_entry['chapter_number'], 'failed', str(e))
-        db.close()
+
+async def queue_loop(bot: Bot):
+    """Process the translation queue every 60 seconds and send results to Telegram."""
+    chat_id = CONFIG.get("telegram", {}).get("chat_id")
+    await asyncio.sleep(5)
+    while True:
+        try:
+            db = TranslationQueueDB()
+            pending_tasks = db.get_pending_tasks()
+            if pending_tasks:
+                logger.info(f"Очередь: найдено {len(pending_tasks)} задач")
+                for task_entry in pending_tasks:
+                    manga_id = task_entry["manga_id"]
+                    chapter_number = task_entry["chapter_number"]
+                    source_lang = task_entry["source_lang"]
+                    try:
+                        logger.info(f"Очередь: перевожу {manga_id[:8]} гл. {chapter_number}")
+                        db.update_task_status(manga_id, chapter_number, "processing")
+                        pipeline = TranslationPipeline()
+                        page_paths = await pipeline.process_chapter(
+                            mangadex_manga_id=manga_id,
+                            chapter_number=chapter_number,
+                            source_lang=source_lang,
+                            target_lang="en",
+                        )
+                        await pipeline.close()
+                        if page_paths:
+                            db.update_task_status(manga_id, chapter_number, "completed")
+                            logger.info(f"Очередь: гл. {chapter_number} переведена")
+                            if chat_id and bot:
+                                try:
+                                    zip_path = Path("temp") / f"q_{manga_id[:8]}_ch_{chapter_number}.zip"
+                                    zip_path.parent.mkdir(parents=True, exist_ok=True)
+                                    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                                        for p in page_paths:
+                                            zf.write(p, arcname=Path(p).name)
+                                    await bot.send_document(
+                                        chat_id, document=FSInputFile(str(zip_path)),
+                                        caption=f"Глава {chapter_number} — готова",
+                                    )
+                                    zip_path.unlink(missing_ok=True)
+                                    await bot.send_message(chat_id, f"✅ Глава {chapter_number}: отправлено")
+                                except Exception as e:
+                                    logger.exception(f"Очередь: отправка гл. {chapter_number} не удалась: {e}")
+                        else:
+                            db.update_task_status(manga_id, chapter_number, "failed", "Нет страниц или не удалось перевести")
+                            if chat_id and bot:
+                                try:
+                                    await bot.send_message(chat_id, f"❌ Глава {chapter_number}: не удалось перевести")
+                                except Exception:
+                                    pass
+                    except Exception as e:
+                        logger.exception(f"Очередь: ошибка гл. {chapter_number}: {e}")
+                        record_error()
+                        db.update_task_status(manga_id, chapter_number, "failed", str(e))
+                    await asyncio.sleep(10)  # delay between chapters
+            db.close()
+        except Exception as e:
+            logger.exception(f"Очередь: ошибка цикла: {e}")
+            record_error()
+        await asyncio.sleep(60)
 
 
 async def startup_translate(bot: Bot):
@@ -285,6 +317,7 @@ async def main():
     mark_bot_started()
     asyncio.create_task(_keepalive())
     asyncio.create_task(scheduler_loop(bot))
+    asyncio.create_task(queue_loop(bot))
     asyncio.create_task(startup_translate(bot))
 
     loop = asyncio.get_running_loop()
