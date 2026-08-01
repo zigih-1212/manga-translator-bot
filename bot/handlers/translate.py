@@ -210,6 +210,86 @@ async def check_chapters(callback: CallbackQuery):
         await callback.message.answer(f"Ошибка проверки глав: {e}")
 
 
+except Exception as e:
+            await callback.message.answer(f"Ошибка проверки глав: {e}")
+
+
+@router.message(Command("debug_chapters"))
+async def cmd_debug_chapters(message: Message):
+    """Debug: show raw API response for chapters."""
+    titles = CONFIG.get("titles", [])
+    if not titles:
+        await message.answer("Нет тайтлов. Сначала /add_title")
+        return
+
+    buttons = []
+    for i, t in enumerate(titles):
+        buttons.append([InlineKeyboardButton(
+            text=f"{t['name']}",
+            callback_data=f"debug_ch:{i}",
+        )])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer("Выбери тайтл для отладки:", reply_markup=kb)
+
+
+@router.callback_query(lambda c: c.data.startswith("debug_ch:"))
+async def debug_chapters(callback: CallbackQuery):
+    idx = int(callback.data.split(":")[1])
+    title = CONFIG["titles"][idx]
+    manga_id = title["mangadex_id"]
+    source_lang = title.get("source_lang", "ko")
+
+    await callback.answer("Загружаю сырой ответ API...")
+    await callback.message.answer(f"🔍 Debug: запрашиваю главы {manga_id} ({source_lang})...")
+
+    try:
+        mangadex_source = MangaDexSource()
+        # Прямой запрос к API без прокси
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.mangadex.org/manga/{manga_id}/feed"
+            params = {
+                "translatedLanguage[]": source_lang,
+                "limit": 500,
+                "offset": 0,
+                "order[chapter]": "asc",
+                "includes[]": "scanlation_group",
+            }
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                if resp.status != 200:
+                    await callback.message.answer(f"HTTP {resp.status}: {await resp.text()}")
+                    return
+                data = await resp.json()
+        
+        items = data.get("data", [])
+        await callback.message.answer(
+            f"📊 Raw API response:\n"
+            f"Total items in response: {len(items)}\n"
+            f"Limit: 500, Offset: 0\n"
+            f"Status: {data.get('result', 'unknown')}\n\n"
+            f"First 3 items:\n" +
+            "\n".join([f"  Ch {item['attributes'].get('chapter', '?')} (id: {item['id'][:8]})" for item in items[:3]])
+        )
+
+        # Парсим как в get_chapters
+        chapters = []
+        seen = set()
+        for item in items:
+            attrs = item["attributes"]
+            ch_num = attrs.get("chapter", "")
+            try:
+                ch_float = float(attrs.get("chapter", ""))
+                if ch_float not in seen:
+                    seen.add(ch_float)
+            except:
+                pass
+        
+        await callback.message.answer(f"Unique chapters parsed: {len(seen)}")
+        
+    except Exception as e:
+        await callback.message.answer(f"Debug error: {e}")
+
+
 @router.shutdown()
 async def shutdown_handler():
     db.close()

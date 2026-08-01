@@ -153,9 +153,25 @@ class MangaDexSource(BaseSource):
     _last_request_time = 0
     _rate_lock = asyncio.Lock()
 
+    @staticmethod
+    def _is_valid_proxy_url(url: str) -> bool:
+        """Проверяет, что URL выглядит как валидный прокси (не railway/render/localhost)."""
+        bad_patterns = [
+            "railway.app", "up.railway.app", "railway.internal",
+            "render.com", "onrender.com",
+            "localhost", "127.0.0.1", "0.0.0.0",
+            ".local", ".internal",
+        ]
+        url_lower = url.lower()
+        return not any(bad in url_lower for bad in bad_patterns)
+
     def __init__(self):
         self._own_session: aiohttp.ClientSession | None = None
         self.proxy_url = os.environ.get("COLAB_URL", "").rstrip("/")
+        # Если COLAB_URL задан, но это не настоящий прокси — игнорируем
+        if self.proxy_url and not self._is_valid_proxy_url(self.proxy_url):
+            log.warning("COLAB_URL looks invalid (%s), ignoring proxy", self.proxy_url)
+            self.proxy_url = ""
         self._proxy = _get_proxy()
 
     async def _rate_limit(self):
@@ -265,7 +281,9 @@ class MangaDexSource(BaseSource):
     async def get_chapters(self, manga_id: str, lang: str = "en") -> list[Chapter]:
         chapters = []
         offset = 0
-        limit = 100
+        limit = 500  # увеличен с 100 до 500 (макс. MangaDex)
+        seen_numbers = set()
+        total_fetched = 0
         while True:
             data = await self._proxy_get(
                 f"/mangadex/{manga_id}/chapters",
@@ -282,24 +300,34 @@ class MangaDexSource(BaseSource):
             items = data.get("data", [])
             if not items:
                 break
+            page_count = 0
             for item in items:
                 attrs = item["attributes"]
                 ch_num = attrs.get("chapter", "")
                 try:
-                    float(ch_num)
+                    ch_float = float(ch_num)
+                    # Дедупликация по номеру главы (MangaDex может возвращать дубликаты от разных групп)
+                    if ch_float in seen_numbers:
+                        continue
+                    seen_numbers.add(ch_float)
+                    page_count += 1
+                    chapters.append(Chapter(
+                        id=item["id"],
+                        number=ch_num,
+                        title=attrs.get("title", ""),
+                        volume=attrs.get("volume"),
+                        pages_count=attrs.get("pages", 0),
+                        translated_language=attrs.get("translatedLanguage", lang),
+                    ))
                 except (ValueError, TypeError):
                     continue
-                chapters.append(Chapter(
-                    id=item["id"],
-                    number=ch_num,
-                    title=attrs.get("title", ""),
-                    volume=attrs.get("volume"),
-                    pages_count=attrs.get("pages", 0),
-                    translated_language=attrs.get("translatedLanguage", lang),
-                ))
+            total_fetched += page_count
+            log.info("get_chapters: manga=%s lang=%s offset=%d fetched=%d unique=%d total=%d",
+                     manga_id, lang, offset, len(items), page_count, total_fetched)
             offset += limit
             if len(items) < limit:
                 break
+        log.info("get_chapters DONE: manga=%s lang=%s total_chapters=%d", manga_id, lang, len(chapters))
         return chapters
 
     async def find_chapter_by_number(self, manga_id: str, chapter_number: str, lang: str) -> Chapter | None:
