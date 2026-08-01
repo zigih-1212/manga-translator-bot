@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint & import check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --no-cache-dir -r requirements.txt
+
+      - name: Byte-compile all python sources
+        run: python -m compileall -q .
+
+      - name: Verify module imports
+        run: python -c "
+          import sys
+          sys.path.insert(0, '.')
+          from translator import llm, colab_client, modal_client, inpainter, upscaler, pipeline, renderer, bubbles, health, alerts, log, sfx_detector, preprocess, manga_ocr, rag, validator
+          from sources import mangadex
+          from cfg import memory
+          from bot import main
+          print('ALL MODULES OK')
+          "
+
+  test:
+    name: Unit sanity tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --no-cache-dir -r requirements.txt
+
+      - name: Validator & renderer sanity
+        run: python -c "
+          import sys
+          sys.path.insert(0, '.')
+          from translator.validator import validate_translation, fix_translation
+          assert validate_translation('안녕하세요', 'Привет!', 'ko')['ok'] is True
+          assert validate_translation('안녕하세요', '안녕하세요', 'ko')['ok'] is False
+          assert fix_translation('x', '[Привет]', 'ko') == 'Привет'
+          from translator.renderer import _polygon_angle
+          assert abs(_polygon_angle([[0,0],[10,0],[10,5],[0,5]])) < 1.0
+          assert abs(_polygon_angle([[0,0],[10,2],[10,7],[0,5]]) - 11.31) < 1.0
+          from translator.preprocess import preprocess_page, sauvola
+          import numpy as np, cv2
+          page = np.full((200, 200, 3), 255, np.uint8)
+          out = preprocess_page(page)
+          assert out.shape == page.shape
+          print('UNIT TESTS OK')
+          "
+
+  build:
+    name: Docker build
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t manga-translator-bot:${{ github.sha }} .
