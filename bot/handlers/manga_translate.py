@@ -11,6 +11,7 @@ from sources.mangadex import MangaDexSource
 from translator.pipeline import TranslationPipeline
 from translator.health import record_error
 from cfg import CONFIG, save_config
+from bot.utils.telegram_helpers import send_text, send_document
 
 router = Router()
 mangadex = MangaDexSource()
@@ -162,7 +163,7 @@ async def run_translation(chat_id: int, r, chapter_nums: list[str], source_lang:
     try:
         for i, ch_num in enumerate(chapter_nums, 1):
             try:
-                await bot_send_text(chat_id, f"📄 [{i}/{len(chapter_nums)}] Глава {ch_num}: перевод...")
+                await send_text(chat_id, f"📄 [{i}/{len(chapter_nums)}] Глава {ch_num}: перевод...")
                 pipeline = TranslationPipeline()
                 page_paths = await pipeline.process_chapter(
                     mangadex_manga_id=manga_id,
@@ -173,7 +174,7 @@ async def run_translation(chat_id: int, r, chapter_nums: list[str], source_lang:
                 await pipeline.close()
 
                 if not page_paths:
-                    await bot_send_text(chat_id, f"❌ Глава {ch_num}: не удалось перевести (глава не найдена).")
+                    await send_text(chat_id, f"❌ Глава {ch_num}: не удалось перевести (глава не найдена).")
                     continue
 
                 zip_path = TEMP_DIR / f"manga_{manga_id[:8]}_ch_{ch_num}.zip"
@@ -182,37 +183,19 @@ async def run_translation(chat_id: int, r, chapter_nums: list[str], source_lang:
                     for p in page_paths:
                         zf.write(p, arcname=Path(p).name)
 
-                await bot_send_document(
+                await send_document(
                     chat_id, zip_path,
                     caption=f"{r.title} — глава {ch_num}",
                 )
                 zip_path.unlink(missing_ok=True)
-                await bot_send_text(chat_id, f"✅ Глава {ch_num} готова!")
+                await send_text(chat_id, f"✅ Глава {ch_num} готова!")
             except Exception as e:
                 record_error()
-                await bot_send_text(chat_id, f"❌ Глава {ch_num}: ошибка: {e}")
+                await send_text(chat_id, f"❌ Глава {ch_num}: ошибка: {e}")
 
             if i < len(chapter_nums):
                 await asyncio.sleep(10)  # delay between chapters
 
-        await bot_send_text(chat_id, f"🏁 Завершено: {len(chapter_nums)} глав обработано.")
+        await send_text(chat_id, f"🏁 Завершено: {len(chapter_nums)} глав обработано.")
     finally:
         active_tasks.pop(chat_id, None)
-
-
-async def bot_send_text(chat_id: int, text: str):
-    from bot.main import bot
-    if bot:
-        try:
-            await bot.send_message(chat_id, text)
-        except Exception:
-            pass
-
-
-async def bot_send_document(chat_id: int, path: Path, caption: str):
-    from bot.main import bot
-    if bot:
-        try:
-            await bot.send_document(chat_id, document=FSInputFile(str(path)), caption=caption)
-        except Exception:
-            pass

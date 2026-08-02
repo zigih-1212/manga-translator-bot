@@ -13,13 +13,13 @@ from typing import Optional, List, Dict, Any
 from sources.mangadex import MangaDexSource
 from translator.llm import LLMTranslator
 from translator.renderer import TextRenderer, _classify_font_style, _is_caption_region, _polygon_angle
-from translator.colab_client import ColabClient
+from translator.kaggle_client import KaggleClient
 from translator.inpainter import LaMaInpainter
 from translator.bubbles import get_bubble_bounds, build_mask, build_smart_mask
 from translator.modal_client import inpaint_batch_sync, MODAL_AVAILABLE
 from translator.sfx_detector import annotate_sfx, is_sfx_text
 from translator.preprocess import preprocess_page, sauvola
-# from translator.upscaler import RealESRGANUpscaler  # Отключено для экономии RAM
+# from translator.upscaler import RealESRGANUpscaler  # РћС‚РєР»СЋС‡РµРЅРѕ РґР»СЏ СЌРєРѕРЅРѕРјРёРё RAM
 from cfg import TEMP_DIR
 
 from cfg.memory import save_translations, _extract_speaker
@@ -66,7 +66,7 @@ CREDIT_KEYWORDS = [
     "illustrator", "story by", "art by", "special thanks", "first published",
     "editor", "designer", "translation", "production", "originally published",
     "no part of", "permission", "license", "printed in",
-    "содержание", "автор", "художник", "издательство", "тираж",
+    "СЃРѕРґРµСЂР¶Р°РЅРёРµ", "Р°РІС‚РѕСЂ", "С…СѓРґРѕР¶РЅРёРє", "РёР·РґР°С‚РµР»СЊСЃС‚РІРѕ", "С‚РёСЂР°Р¶",
 ]
 
 
@@ -203,11 +203,11 @@ class TranslationPipeline:
         self.mangadex = MangaDexSource()
         self.translator = LLMTranslator()
         self.renderer = TextRenderer()
-        self.colab = ColabClient()
+        self.kaggle = KaggleClient()
         self.inpainter = LaMaInpainter()
         self.progress_callback = None
         self._bg_mask = None
-        # self._upscaler = RealESRGANUpscaler()  # Отключено для экономии RAM
+        # self._upscaler = RealESRGANUpscaler()  # РћС‚РєР»СЋС‡РµРЅРѕ РґР»СЏ СЌРєРѕРЅРѕРјРёРё RAM
 
     def on_progress(self, callback):
         self.progress_callback = callback
@@ -317,31 +317,31 @@ class TranslationPipeline:
         work_dir = TEMP_DIR / f"chapter_{chapter_number}"
         work_dir.mkdir(parents=True, exist_ok=True)
 
-        await self.colab.init()
+        await self.kaggle.init()
 
-        await self._report(f"Поиск {source_lang} главы {chapter_number}...", 0, 100)
+        await self._report(f"РџРѕРёСЃРє {source_lang} РіР»Р°РІС‹ {chapter_number}...", 0, 100)
         src_chapter = await self.mangadex.find_chapter_by_number(
             mangadex_manga_id, chapter_number, source_lang
         )
         if not src_chapter:
-            await self._report(f"Глава {chapter_number} ({source_lang}) не найдена!", 0, 1)
+            await self._report(f"Р“Р»Р°РІР° {chapter_number} ({source_lang}) РЅРµ РЅР°Р№РґРµРЅР°!", 0, 1)
             return []
 
-        await self._report(f"Поиск {target_lang} главы {chapter_number}...", 2, 100)
+        await self._report(f"РџРѕРёСЃРє {target_lang} РіР»Р°РІС‹ {chapter_number}...", 2, 100)
         en_chapter = await self.mangadex.find_chapter_by_number(
             mangadex_manga_id, chapter_number, target_lang
         )
 
-        await self._report(f"Получаем список страниц {source_lang}...", 5, 100)
+        await self._report(f"РџРѕР»СѓС‡Р°РµРј СЃРїРёСЃРѕРє СЃС‚СЂР°РЅРёС† {source_lang}...", 5, 100)
         src_pages = await self.mangadex.get_pages(src_chapter.id)
         total_pages = len(src_pages)
         if not total_pages:
-            await self._report("Нет страниц!", 0, 1)
+            await self._report("РќРµС‚ СЃС‚СЂР°РЅРёС†!", 0, 1)
             return []
 
         en_page_map = {}
         if en_chapter:
-            await self._report(f"Получаем список страниц {target_lang}...", 7, 100)
+            await self._report(f"РџРѕР»СѓС‡Р°РµРј СЃРїРёСЃРѕРє СЃС‚СЂР°РЅРёС† {target_lang}...", 7, 100)
             en_pages = await self.mangadex.get_pages(en_chapter.id)
             en_page_map = {p.index: p for p in en_pages}
 
@@ -361,7 +361,7 @@ class TranslationPipeline:
             chunk_end = min(chunk_start + CHUNK_SIZE, total_pages)
             chunk_size = chunk_end - chunk_start
             
-            await self._report(f"Обрабатываем чанк {chunk_start//CHUNK_SIZE + 1}/{(total_pages + CHUNK_SIZE - 1)//CHUNK_SIZE} (стр. {chunk_start+1}-{chunk_end})", 
+            await self._report(f"РћР±СЂР°Р±Р°С‚С‹РІР°РµРј С‡Р°РЅРє {chunk_start//CHUNK_SIZE + 1}/{(total_pages + CHUNK_SIZE - 1)//CHUNK_SIZE} (СЃС‚СЂ. {chunk_start+1}-{chunk_end})", 
                              5 + int(90 * chunk_start / total_pages), 100)
 
             # Initialize queues for this chunk
@@ -380,7 +380,7 @@ class TranslationPipeline:
 
             # ---- Stage 1: Downloader (fetches pages) ----
             async def stage_downloader():
-                # Уменьшаем параллельность для экономии RAM
+                # РЈРјРµРЅСЊС€Р°РµРј РїР°СЂР°Р»Р»РµР»СЊРЅРѕСЃС‚СЊ РґР»СЏ СЌРєРѕРЅРѕРјРёРё RAM
                 sem = asyncio.Semaphore(1)  # max 1 concurrent download
                 async def download_one(i: int):
                     async with sem:
@@ -402,7 +402,7 @@ class TranslationPipeline:
                                 "img_h": img_h,
                             }
                         except Exception as e:
-                            await self._report(f"Ошибка скачивания стр. {chunk_start+i+1}: {e}", 
+                            await self._report(f"РћС€РёР±РєР° СЃРєР°С‡РёРІР°РЅРёСЏ СЃС‚СЂ. {chunk_start+i+1}: {e}", 
                                              10 + int(80 * (chunk_start+i) / total_pages), 100)
                             return None
 
@@ -418,7 +418,7 @@ class TranslationPipeline:
 
             # ---- Stage 2: Preprocessor (auto-rotate, upscale, OCR) ----
             async def stage_preprocessor():
-                # Параллельный OCR: несколько страниц одновременно (лимитер защищает)
+                # РџР°СЂР°Р»Р»РµР»СЊРЅС‹Р№ OCR: РЅРµСЃРєРѕР»СЊРєРѕ СЃС‚СЂР°РЅРёС† РѕРґРЅРѕРІСЂРµРјРµРЅРЅРѕ (Р»РёРјРёС‚РµСЂ Р·Р°С‰РёС‰Р°РµС‚)
                 sem = asyncio.Semaphore(3)
                 async def preprocess(item):
                     if item.get("error"):
@@ -435,7 +435,7 @@ class TranslationPipeline:
                             # Auto-rotate
                             src_data = self._auto_rotate(src_data)
 
-                            # Upscale (отключено для экономии RAM)
+                            # Upscale (РѕС‚РєР»СЋС‡РµРЅРѕ РґР»СЏ СЌРєРѕРЅРѕРјРёРё RAM)
                             # if self._upscaler.available:
                             #     try:
                             #         np_img = np.frombuffer(src_data, np.uint8)
@@ -448,7 +448,7 @@ class TranslationPipeline:
 
                             # OCR source
                             ocr_texts = []
-                            if self.colab.is_connected:
+                            if self.kaggle.is_connected:
                                 try:
                                     preprocessed = src_data
                                     try:
@@ -461,7 +461,7 @@ class TranslationPipeline:
                                                 preprocessed = enc.tobytes()
                                     except Exception:
                                         pass
-                                    ocr_result = await self.colab.ocr_pages([preprocessed], lang=source_lang)
+                                    ocr_result = await self.kaggle.ocr_pages([preprocessed], lang=source_lang)
                                     ocr_texts = ocr_result[0] if ocr_result else []
 
                                     # Auto-retry: page has visible dark pixels but OCR found nothing
@@ -475,7 +475,7 @@ class TranslationPipeline:
                                                 cv_retry = cv2.cvtColor(cv_binary, cv2.COLOR_GRAY2BGR)
                                                 ok, enc = cv2.imencode(".png", cv_retry)
                                                 if ok:
-                                                    ocr_result = await self.colab.ocr_pages([enc.tobytes()], lang=source_lang)
+                                                    ocr_result = await self.kaggle.ocr_pages([enc.tobytes()], lang=source_lang)
                                                     ocr_texts = ocr_result[0] if ocr_result else []
                                         except Exception:
                                             pass
@@ -505,9 +505,9 @@ class TranslationPipeline:
 
                             # OCR English reference
                             en_texts = []
-                            if en_data and ocr_texts and self.colab.is_connected:
+                            if en_data and ocr_texts and self.kaggle.is_connected:
                                 try:
-                                    en_ocr = await self.colab.ocr_pages([en_data], lang=target_lang)
+                                    en_ocr = await self.kaggle.ocr_pages([en_data], lang=target_lang)
                                     en_texts = [r.get("text", "") for r in (en_ocr[0] if en_ocr else []) if r.get("text")]
                                 except Exception:
                                     pass
@@ -575,7 +575,7 @@ class TranslationPipeline:
                     speakers = item.get("speakers", [])
 
                     try:
-                        await self._report(f"Перевод стр. {chunk_start+idx+1}/{total_pages}", 
+                        await self._report(f"РџРµСЂРµРІРѕРґ СЃС‚СЂ. {chunk_start+idx+1}/{total_pages}", 
                                          10 + int(80 * (chunk_start+idx) / total_pages), 100)
                         translations = await self.translator.translate_page(
                             korean_texts=grouped_ko,
@@ -586,7 +586,7 @@ class TranslationPipeline:
                             source_lang=source_lang,
                         )
                     except Exception as e:
-                        await self._report(f"Перевод ошибка стр. {chunk_start+idx+1}: {e}", 
+                        await self._report(f"РџРµСЂРµРІРѕРґ РѕС€РёР±РєР° СЃС‚СЂ. {chunk_start+idx+1}: {e}", 
                                          10 + int(80 * (chunk_start+idx) / total_pages), 100)
                         translations = []
 
@@ -619,7 +619,7 @@ class TranslationPipeline:
 
             # ---- Stage 4: Inpainter + Renderer ----
             async def stage_inpainter_renderer():
-                # Уменьшаем параллельность для экономии RAM
+                # РЈРјРµРЅСЊС€Р°РµРј РїР°СЂР°Р»Р»РµР»СЊРЅРѕСЃС‚СЊ РґР»СЏ СЌРєРѕРЅРѕРјРёРё RAM
                 sem = asyncio.Semaphore(1)
                 while True:
                     item = await translated_queue.get()
@@ -829,13 +829,13 @@ class TranslationPipeline:
 
                     out_path = work_dir / f"{(chunk_start+i):03d}.png"
                     out_path.write_bytes(out_data)
-                    await self._report(f"Сохранено стр. {chunk_start+i+1}/{total_pages}", 
+                    await self._report(f"РЎРѕС…СЂР°РЅРµРЅРѕ СЃС‚СЂ. {chunk_start+i+1}/{total_pages}", 
                                      10 + int(80 * (chunk_start+i) / total_pages), 100)
 
                 done_event.set()
 
             # Launch all stages
-            await self._report("Запуск конвейера...", 
+            await self._report("Р—Р°РїСѓСЃРє РєРѕРЅРІРµР№РµСЂР°...", 
                              10 + int(80 * chunk_start / total_pages), 100)
 
             stage_tasks = [
@@ -875,10 +875,10 @@ class TranslationPipeline:
             self.translator.clear_context()
 
             # Report progress
-            await self._report(f"Чанк {chunk_start//CHUNK_SIZE + 1} завершен. Всего обработано: {chunk_end}/{total_pages} стр.", 
+            await self._report(f"Р§Р°РЅРє {chunk_start//CHUNK_SIZE + 1} Р·Р°РІРµСЂС€РµРЅ. Р’СЃРµРіРѕ РѕР±СЂР°Р±РѕС‚Р°РЅРѕ: {chunk_end}/{total_pages} СЃС‚СЂ.", 
                              10 + int(90 * chunk_end / total_pages), 100)
 
-        # Сохраняем переводы в память
+        # РЎРѕС…СЂР°РЅСЏРµРј РїРµСЂРµРІРѕРґС‹ РІ РїР°РјСЏС‚СЊ
         if all_final_paths:
             current_chapter_translations = []
             for item in translated_queue._queue:
@@ -886,7 +886,7 @@ class TranslationPipeline:
                     current_chapter_translations.extend(item["translations"])
             await asyncio.to_thread(save_translations, mangadex_manga_id, mangadex_manga_id, chapter_number, current_chapter_translations)
 
-        await self._report("Готово!", 100, 100)
+        await self._report("Р“РѕС‚РѕРІРѕ!", 100, 100)
         if all_final_paths:
             inc_metric("chapters_processed")
             inc_metric("pages_processed", len(all_final_paths))
@@ -894,6 +894,6 @@ class TranslationPipeline:
 
     async def close(self):
         await self.mangadex.close()
-        await self.colab.close()
+        await self.kaggle.close()
         await self.translator.close()
         await self.inpainter.close()  # Ensure inpainter is closed

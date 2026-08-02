@@ -5,9 +5,9 @@
 ## Возможности
 
 - Загрузка глав с MangaDex
-- OCR текста (ocr.space через Colab + локальный Manga-OCR ONNX для японского)
+- OCR текста (ocr.space через Kaggle/Colab + локальный Manga-OCR ONNX для японского)
 - Перевод через мульти-провайдерную цепочку:
-  - Colab server (основной, rate-limited)
+  - Remote server (Kaggle/Colab, основной, rate-limited)
   - Groq (Llama 70B)
   - Gemini 2.0 Flash
   - OpenRouter (free/paid)
@@ -52,7 +52,7 @@ TG_API_HASH=...
 GROQ_API_KEY=...        # необязательно
 GEMINI_API_KEY=...      # необязательно
 OPENROUTER_API_KEY=...  # необязательно
-COLAB_URL=...           # URL Colab-сервера OCR/перевода
+REMOTE_SERVER_URL=...   # URL Kaggle/Colab-сервера OCR/перевода
 DATA_DIR=/app/data/config  # Railway Volume для конфигов
 HEALTH_PORT=8080
 METRICS_REPORT_INTERVAL=3600

@@ -135,7 +135,14 @@ proxy_breaker = CircuitBreaker(max_failures=3, reset_timeout=30)
 log = logging.getLogger("manga_translator")
 
 def _get_proxy():
-    return os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or os.environ.get("http_proxy") or os.environ.get("https_proxy")
+    p = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or os.environ.get("TG_PROXY_URL") or os.environ.get("http_proxy") or os.environ.get("https_proxy")
+    if not p:
+        try:
+            from cfg import TG_PROXY_URL
+            p = TG_PROXY_URL
+        except Exception:
+            p = ""
+    return p or None
 
 
 def _httpx_client(**kwargs):
@@ -167,10 +174,10 @@ class MangaDexSource(BaseSource):
 
     def __init__(self):
         self._own_session: aiohttp.ClientSession | None = None
-        self.proxy_url = os.environ.get("COLAB_URL", "").rstrip("/")
-        # Если COLAB_URL задан, но это не настоящий прокси — игнорируем
+        self.proxy_url = os.environ.get("REMOTE_SERVER_URL", "").rstrip("/")
+        # Если REMOTE_SERVER_URL задан, но это не настоящий прокси — игнорируем
         if self.proxy_url and not self._is_valid_proxy_url(self.proxy_url):
-            log.warning("COLAB_URL looks invalid (%s), ignoring proxy", self.proxy_url)
+            log.warning("REMOTE_SERVER_URL looks invalid (%s), ignoring proxy", self.proxy_url)
             self.proxy_url = ""
         self._proxy = _get_proxy()
 
@@ -189,26 +196,44 @@ class MangaDexSource(BaseSource):
                     r = await c.get(url, params=params)
                     r.raise_for_status()
                     return r.json()
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("MangaDex proxy_url error: %s", e)
+
         async with self._rate_limit_sem:
             await self._rate_limit()
             for attempt in range(self.MAX_RETRIES):
+                # 1) Try httpx (handles proxies, SSL, HTTP/2, DNS gracefully)
                 try:
-                    async with aiohttp.ClientSession() as session:
+                    async with _httpx_client(timeout=30.0) as client:
+                        resp = await client.get(url, params=params)
+                        if resp.status_code == 429:
+                            wait = 2 ** (attempt + 1)
+                            log.warning("MangaDex 429 (httpx), жду %dс...", wait)
+                            await asyncio.sleep(wait)
+                            continue
+                        resp.raise_for_status()
+                        return resp.json()
+                except Exception as e1:
+                    log.warning("MangaDex httpx попытка %d/%d ошибка: %s", attempt + 1, self.MAX_RETRIES, e1)
+
+                # 2) Fallback to aiohttp with IPv4 connector
+                try:
+                    import socket
+                    conn = aiohttp.TCPConnector(family=socket.AF_INET)
+                    async with aiohttp.ClientSession(connector=conn) as session:
                         async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                             if resp.status == 429:
                                 wait = 2 ** (attempt + 1)
-                                log.warning("MangaDex 429, жду %dс...", wait)
+                                log.warning("MangaDex 429 (aiohttp), жду %dс...", wait)
                                 await asyncio.sleep(wait)
                                 continue
                             resp.raise_for_status()
                             return await resp.json()
-                except (aiohttp.ClientError, TimeoutError, asyncio.TimeoutError) as e:
-                    log.warning("MangaDex попытка %d/%d ошибка: %s", attempt+1, self.MAX_RETRIES, e)
-                    if attempt == self.MAX_RETRIES - 1:
-                        raise
-                    await asyncio.sleep(2 ** attempt)
+                except Exception as e2:
+                    log.warning("MangaDex aiohttp попытка %d/%d ошибка: %s", attempt + 1, self.MAX_RETRIES, e2)
+
+                await asyncio.sleep(2 ** attempt)
+
         return {}
 
     @timeout_async(timeout=30.0)
@@ -254,6 +279,12 @@ class MangaDexSource(BaseSource):
                 "includes[]": "cover_art",
                 "order[relevance]": "desc",
             })
+            if not data or not data.get("data"):
+                data = await self._get_json(f"{self.BASE}/manga", params={
+                    "title": title,
+                    "limit": 10,
+                    "includes[]": "cover_art",
+                })
         results = []
         for item in data.get("data", []):
             attrs = item["attributes"]

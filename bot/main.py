@@ -12,7 +12,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.types import FSInputFile
-from cfg import TG_BOT_TOKEN, TG_PROXY_URL, COLAB_URL, CONFIG, save_config, validate_config
+from cfg import TG_BOT_TOKEN, TG_PROXY_URL, REMOTE_SERVER_URL, CONFIG, save_config, validate_config
 from bot.handlers import start_router, titles_router, translate_router, status_router, manga_info_router, manga_translate_router
 from sources.mangadex import MangaDexSource
 from translator.pipeline import TranslationPipeline
@@ -30,13 +30,13 @@ KEEPALIVE_INTERVAL = 600
 
 
 async def _keepalive():
-    if not COLAB_URL:
+    if not REMOTE_SERVER_URL:
         return
     proxy = HTTP_PROXY or None
     while True:
         try:
             async with httpx.AsyncClient(proxy=proxy, timeout=10) as c:
-                r = await c.get(f"{COLAB_URL}/health")
+                r = await c.get(f"{REMOTE_SERVER_URL}/health")
                 logger.info(f"Keepalive ping: {r.status_code}")
         except Exception as e:
             logger.warning(f"Keepalive failed: {e}")
@@ -193,6 +193,8 @@ async def scheduler_loop(bot: Bot):
 async def queue_loop(bot: Bot):
     """Process the translation queue every 60 seconds and send results to Telegram."""
     chat_id = CONFIG.get("telegram", {}).get("chat_id")
+    if not chat_id:
+        logger.warning("queue_loop: chat_id не настроен, задачи будут выполняться без отправки в Telegram")
     await asyncio.sleep(5)
     while True:
         try:
@@ -233,6 +235,8 @@ async def queue_loop(bot: Bot):
                                     await bot.send_message(chat_id, f"✅ Глава {chapter_number}: отправлено")
                                 except Exception as e:
                                     logger.exception(f"Очередь: отправка гл. {chapter_number} не удалась: {e}")
+                            else:
+                                logger.info(f"Очередь: гл. {chapter_number} готова (chat_id не задан, отправка пропущена)")
                         else:
                             db.update_task_status(manga_id, chapter_number, "failed", "Нет страниц или не удалось перевести")
                             if chat_id and bot:
@@ -300,6 +304,8 @@ async def startup_translate(bot: Bot):
 async def main():
     global bot
     bot = Bot(token=TG_BOT_TOKEN, session=build_session(), default=DefaultBotProperties(parse_mode=None))
+    from bot.utils.telegram_helpers import set_bot
+    set_bot(bot)
     dp = Dispatcher()
 
     dp.include_router(start_router)

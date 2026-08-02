@@ -163,7 +163,7 @@ PADDLE_LANG_MAP = {
 }
 
 
-class ColabClient:
+class KaggleClient:
     def __init__(self, base_url: str = ""):
         proxy = _get_proxy()
         self.client = httpx.AsyncClient(timeout=120.0, proxy=proxy, verify=False) if proxy else httpx.AsyncClient(timeout=120.0)

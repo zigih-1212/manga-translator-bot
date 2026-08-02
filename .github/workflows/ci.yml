@@ -30,7 +30,7 @@ jobs:
         run: python -c "
           import sys
           sys.path.insert(0, '.')
-          from translator import llm, colab_client, modal_client, inpainter, upscaler, pipeline, renderer, bubbles, health, alerts, log, sfx_detector, preprocess, manga_ocr, rag, validator
+          from translator import llm, kaggle_client, modal_client, inpainter, upscaler, pipeline, renderer, bubbles, health, alerts, log, sfx_detector, preprocess, manga_ocr, rag, validator
           from sources import mangadex
           from cfg import memory
           from bot import main

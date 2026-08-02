@@ -8,7 +8,7 @@ import httpx
 import time
 import random
 from functools import wraps
-from cfg import GLOSSARY, CONFIG, COLAB_URL, OPENROUTER_API_KEY, GROQ_API_KEY, GEMINI_API_KEY
+from cfg import GLOSSARY, CONFIG, REMOTE_SERVER_URL, OPENROUTER_API_KEY, GROQ_API_KEY, GEMINI_API_KEY
 
 from cfg.memory import get_context as get_memory_context, get_glossary as get_memory_glossary, get_character_profiles
 from translator.rag import RAGIndex, load_translations_from_memory
@@ -139,9 +139,15 @@ def timeout_async(timeout: float = 60.0):
 
 # Global circuit breakers
 openrouter_breaker = CircuitBreaker(max_failures=3, reset_timeout=30)
-colab_breaker = CircuitBreaker(max_failures=3, reset_timeout=30)
+remote_breaker = CircuitBreaker(max_failures=3, reset_timeout=30)
 gemini_breaker = CircuitBreaker(max_failures=3, reset_timeout=30)
 groq_breaker = CircuitBreaker(max_failures=3, reset_timeout=30)
+
+# Global rate limiters
+openrouter_limiter = RateLimiter(rate=2, capacity=5)
+remote_limiter = RateLimiter(rate=3, capacity=8)  # Kaggle/Colab server requests
+gemini_limiter = RateLimiter(rate=2, capacity=5)
+groq_limiter = RateLimiter(rate=3, capacity=8)
 
 # Global bulkhead semaphores for limiting concurrent requests
 translation_semaphore = asyncio.Semaphore(3)  # Max 3 concurrent translations
@@ -297,10 +303,10 @@ def _has_untranslated(text: str) -> bool:
 
 class LLMTranslator:
     def __init__(self):
-        self.colab_url = (COLAB_URL or "").rstrip("/")
-        self.colab_available = False
+        self.remote_server_url = (REMOTE_SERVER_URL or "").rstrip("/")
+        self.remote_available = False
         self.context_pages: list[str] = []
-        self.colab_client = None
+        self.remote_client = None
         self.model = CONFIG["llm"]["model"]
         self.temperature = CONFIG["llm"]["temperature"]
         self._memory_context = ""
@@ -309,34 +315,34 @@ class LLMTranslator:
         self._rag_index = None
         self._rag_context = ""
 
-        if self.colab_url:
-            self._test_colab()
+        if self.remote_server_url:
+            self._test_remote()
 
         self._providers = []
         self._init_providers()
         self._print_chain()
 
-    def _test_colab(self):
+    def _test_remote(self):
         try:
             kwargs = {"timeout": 5.0}
             proxy = _get_proxy()
             if proxy:
                 kwargs["proxy"] = proxy
-            resp = httpx.get(f"{self.colab_url}/health", **kwargs)
+            resp = httpx.get(f"{self.remote_server_url}/health", **kwargs)
             if resp.status_code == 200:
-                self.colab_available = True
-                self.colab_client = _make_client(60.0)
-                log.info("Colab OK — %s", self.colab_url)
+                self.remote_available = True
+                self.remote_client = _make_client(60.0)
+                log.info("Remote Server OK — %s", self.remote_server_url)
             else:
-                log.warning("Colab health check returned %d, skipping", resp.status_code)
+                log.warning("Remote Server health check returned %d, skipping", resp.status_code)
         except Exception:
-            log.warning("Colab unreachable, skipping")
+            log.warning("Remote Server unreachable, skipping")
 
     def _init_providers(self):
-        # Colab Server (если доступен) - имеет приоритет, так как локальный
-        if self.colab_available:
-            self._providers.append(("Colab Server", self._call_colab))
-        # Groq (Llama 70B) - бесплатно и качественно
+        # Remote Server (Kaggle/Colab) - has priority since it's local GPU
+        if self.remote_available:
+            self._providers.append(("Remote Server", self._call_remote))
+        # Groq (Llama 70B) - free and good quality
         if GROQ_API_KEY:
             self._providers.append(("Groq (Llama 70B)", self._call_groq))
         # Gemini 2.0 Flash - если Groq не сработал
@@ -537,9 +543,9 @@ class LLMTranslator:
     @timeout_async(timeout=60.0)
     @circuit_breaker(max_failures=3, reset_timeout=30)
     @retry_async(max_attempts=3, base_delay=1.0, max_delay=10.0)
-    async def _call_colab(self, korean_texts, english_texts, page_number) -> list[dict] | None:
+    async def _call_remote(self, korean_texts, english_texts, page_number) -> list[dict] | None:
         async with translation_semaphore:
-            await colab_limiter.wait()
+            await remote_limiter.wait()
             try:
                 payload = {
                     "korean_texts": korean_texts,
@@ -553,7 +559,7 @@ class LLMTranslator:
                         "character_profiles": self._character_profiles,
                     },
                 }
-                resp = await self.colab_client.post(f"{self.colab_url}/translate", json=payload, timeout=60.0)
+                resp = await self.remote_client.post(f"{self.remote_server_url}/translate", json=payload, timeout=60.0)
                 resp.raise_for_status()
                 data = resp.json()
                 return data.get("translations", [])
@@ -748,5 +754,5 @@ class LLMTranslator:
         return result
 
     async def close(self):
-        if self.colab_client:
-            await self.colab_client.aclose()
+        if self.remote_client:
+            await self.remote_client.aclose()
