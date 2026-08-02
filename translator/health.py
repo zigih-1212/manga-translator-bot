@@ -17,6 +17,7 @@ _bot_uptime_start = None
 _last_activity = time.monotonic()
 _monitor_task = None
 _report_task = None
+_metrics_report_task = None
 _alert_cooldown_until = 0.0
 _metrics = {
     "chapters_processed": 0,
@@ -131,19 +132,21 @@ async def start_health_server(port: int = HEALTH_PORT):
     site = web.TCPSite(runner, host="0.0.0.0", port=port)
     await site.start()
     log.info("Health server listening on 0.0.0.0:%s", port)
-    global _monitor_task, _report_task
+    global _monitor_task, _report_task, _metrics_report_task
     if _monitor_task is None:
         _monitor_task = asyncio.create_task(_monitor_loop())
     if _report_task is None:
         _report_task = asyncio.create_task(_persist_loop())
+    if _metrics_report_task is None and _REPORT_INTERVAL > 0:
+        _metrics_report_task = asyncio.create_task(_report_loop())
     return runner
 
 
 async def stop_health_server(runner):
     if runner:
         await runner.cleanup()
-    global _monitor_task, _report_task
-    for task_name in ("_monitor_task", "_report_task"):
+    global _monitor_task, _report_task, _metrics_report_task
+    for task_name in ("_monitor_task", "_report_task", "_metrics_report_task"):
         task = globals()[task_name]
         if task:
             task.cancel()
@@ -186,18 +189,13 @@ async def _monitor_loop(interval: float = 60.0):
 
 
 async def _persist_loop(interval: float = 300.0):
-    """Periodically dump metrics to JSON + send a periodic Telegram summary."""
+    """Periodically dump metrics to JSON."""
     while True:
         await asyncio.sleep(interval)
         try:
             _persist_metrics()
         except Exception as e:
             log.error("Persist loop error: %s", e)
-        if _REPORT_INTERVAL > 0:
-            try:
-                await _send_periodic_report()
-            except Exception as e:
-                log.error("Report loop error: %s", e)
 
 
 def _format_duration(seconds: float) -> str:
@@ -209,6 +207,16 @@ def _format_duration(seconds: float) -> str:
     if m:
         return f"{m}м {s}с"
     return f"{s}с"
+
+
+async def _report_loop(interval: float = _REPORT_INTERVAL):
+    """Periodically send a Telegram summary."""
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await _send_periodic_report()
+        except Exception as e:
+            log.error("Report loop error: %s", e)
 
 
 async def _send_periodic_report():

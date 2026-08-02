@@ -4,8 +4,11 @@ from dotenv import load_dotenv
 import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv()  # CWD
 load_dotenv(BASE_DIR / "cfg" / ".env")
 load_dotenv(BASE_DIR / ".env")
+load_dotenv(Path.cwd() / ".env")
+load_dotenv(Path.cwd() / "cfg" / ".env")
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "") or str(BASE_DIR / "cfg"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -24,6 +27,13 @@ def _load_json(path: Path, default=None):
     except Exception:
         return default if default is not None else {}
 
+def _deep_merge(target: dict, source: dict) -> dict:
+    for k, v in source.items():
+        if k in target and isinstance(target[k], dict) and isinstance(v, dict):
+            target[k] = _deep_merge(target[k], v)
+        else:
+            target[k] = v
+    return target
 
 DEFAULT_CONFIG = {
     "webfandom": {"base_url": "https://webfandom.ru", "team_name": ""},
@@ -35,20 +45,22 @@ DEFAULT_CONFIG = {
     "telegram": {},
     "chapters": {},
 }
-CONFIG = _load_json(CONFIG_PATH, DEFAULT_CONFIG)
+CONFIG = DEFAULT_CONFIG.copy()
+loaded_config = _load_json(CONFIG_PATH, {})
+_deep_merge(CONFIG, loaded_config)
 GLOSSARY = _load_json(GLOSSARY_PATH, {})
 FONTS = _load_json(FONTS_PATH, {})
 
-TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
-TG_API_ID = int(os.getenv("TG_API_ID", "0"))
-TG_API_HASH = os.getenv("TG_API_HASH")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-WEBFANDOM_ACCESS_TOKEN = os.getenv("WEBFANDOM_ACCESS_TOKEN")
-WEBFANDOM_REFRESH_TOKEN = os.getenv("WEBFANDOM_REFRESH_TOKEN")
-COLAB_URL = os.getenv("COLAB_URL", "")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-TG_PROXY_URL = os.getenv("TG_PROXY_URL", "")
+TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN") or CONFIG.get("telegram", {}).get("bot_token") or CONFIG.get("telegram", {}).get("token") or ""
+TG_API_ID = int(os.getenv("TG_API_ID") or CONFIG.get("telegram", {}).get("api_id") or "0")
+TG_API_HASH = os.getenv("TG_API_HASH") or CONFIG.get("telegram", {}).get("api_hash") or ""
+GROQ_API_KEY = os.getenv("GROQ_API_KEY") or CONFIG.get("llm", {}).get("groq_api_key") or ""
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or CONFIG.get("llm", {}).get("gemini_api_key") or ""
+WEBFANDOM_ACCESS_TOKEN = os.getenv("WEBFANDOM_ACCESS_TOKEN", "")
+WEBFANDOM_REFRESH_TOKEN = os.getenv("WEBFANDOM_REFRESH_TOKEN", "")
+COLAB_URL = os.getenv("COLAB_URL") or CONFIG.get("llm", {}).get("colab_url") or ""
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY") or CONFIG.get("llm", {}).get("openrouter_api_key") or ""
+TG_PROXY_URL = os.getenv("TG_PROXY_URL") or CONFIG.get("telegram", {}).get("proxy_url") or ""
 
 TEMP_DIR = BASE_DIR / "temp"
 TEMP_DIR.mkdir(exist_ok=True)
