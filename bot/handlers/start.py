@@ -11,7 +11,7 @@ async def cmd_start(message: Message):
     CONFIG.setdefault("telegram", {})["chat_id"] = message.chat.id
     save_config()
     await message.answer(
-        "Manga Translator Bot\n\n"
+        "Привет! Это бот для перевода манги\n\n"
         "/add_title — добавить тайтл (поиск на MangaDex)\n"
         "/list — список тайтлов\n"
         "/translate — перевод главы\n"
