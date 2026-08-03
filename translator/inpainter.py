@@ -123,3 +123,9 @@ class LaMaInpainter:
         mask = cv2.dilate(mask, np.ones((5, 5), np.uint8), iterations=3)
         result = cv2.inpaint(image, mask, 10, cv2.INPAINT_NS)
         return result
+
+    def close(self):
+        if self.session:
+            del self.session
+            self.session = None
+            self._available = False

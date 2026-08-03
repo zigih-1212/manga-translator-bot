@@ -15,7 +15,7 @@ cfg/backups/
 # Extras (not needed for Railway)
 .devcontainer/
 codespace/
-colab/
+kaggle/
 hf-spaces/
 check_gradio.py
 explore_*.py

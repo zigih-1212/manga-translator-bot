@@ -66,7 +66,7 @@ CREDIT_KEYWORDS = [
     "illustrator", "story by", "art by", "special thanks", "first published",
     "editor", "designer", "translation", "production", "originally published",
     "no part of", "permission", "license", "printed in",
-    "СЃРѕРґРµСЂР¶Р°РЅРёРµ", "Р°РІС‚РѕСЂ", "С…СѓРґРѕР¶РЅРёРє", "РёР·РґР°С‚РµР»СЊСЃС‚РІРѕ", "С‚РёСЂР°Р¶",
+    "содержание", "автор", "художник", "издательство", "тираж",
 ]
 
 

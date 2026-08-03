@@ -1,0 +1,23 @@
+# Поведение по умолчанию для всех файлов: автоопределение текстовых файлов
+# Git будет автоматически нормализовать окончания строк в LF при коммите в репозиторий,
+# и конвертировать в системные (CRLF на Windows) при извлечении (checkout)
+* text=auto
+
+# Явное указание для исходного кода и скриптов (всегда использовать LF в репозитории)
+*.py text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf
+
+# Бинарные файлы (изображения, шрифты и т.д.) не должны нормализоваться
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ttf binary
+*.woff binary
+*.woff2 binary
+*.pdf binary

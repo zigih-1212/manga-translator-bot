@@ -1,0 +1,47 @@
+# Cache and compiled files
+__pycache__/
+*.pyc
+*.pyo
+node_modules/
+.venv/
+venv/
+env/
+dist/
+build/
+*.egg-info/
+
+# Logs and temporary files
+*.log
+*.err
+logs/
+temp/
+tmp/
+*.tmp
+*.swp
+
+# Bинарные шрифты и медиа — не читаются как код
+manga-publisher/fonts/
+*.ttf
+*.otf
+*.woff
+*.woff2
+
+# Логи и временные файлы — сгенерированные, не исходники
+*.log
+*.err
+logs/
+temp/
+tmp/
+*.tmp
+*.swp
+
+# Бинарные шрифты и медиа — не читаются как код
+manga-publisher/fonts/
+*.ttf
+*.otf
+*.woff
+*.woff2
+
+# Локальная конфигурация секретов (не читать автоматически)
+.env
+.env.local
