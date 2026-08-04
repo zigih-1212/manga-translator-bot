@@ -42,6 +42,26 @@ def _spawn(cmd, log_path, tag: str) -> subprocess.Popen:
     return proc
 
 
+def _kill_old_processes():
+    """Kill previously-started server.py/main.py so only one instance runs."""
+    import subprocess as sp
+
+    for script in ("server.py", "main.py"):
+        try:
+            out = sp.run(
+                ["pgrep", "-f", script],
+                capture_output=True, text=True, timeout=10,
+            )
+        except Exception:
+            continue
+        for pid in out.stdout.split():
+            try:
+                sp.run(["kill", "-9", pid], timeout=5)
+                print(f"[cleanup] killed old {script} pid={pid}")
+            except Exception:
+                pass
+
+
 def _server_healthy() -> bool:
     try:
         import httpx
@@ -55,6 +75,8 @@ def _server_healthy() -> bool:
 def supervise():
     print("Supervisor started. Press Ctrl+C or stop the cell to stop everything.")
     print(f"ROOT: {ROOT}")
+
+    _kill_old_processes()
 
     server = None
     bot = None

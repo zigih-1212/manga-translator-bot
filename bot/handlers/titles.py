@@ -90,7 +90,14 @@ async def select_source_lang(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
     data = await state.get_data()
-    manga_id = data["manga_id"]
+    manga_id = data.get("manga_id")
+    if not manga_id:
+        await callback.message.answer(
+            "Сессия добавления тайтла сброшена (бот перезапускался). "
+            "Начни заново: /add_title"
+        )
+        await state.clear()
+        return
     title_name = data.get("manga_name", f"MangaDex:{manga_id[:8]}")
     await callback.message.answer(f"Ищу главы на языке «{source_lang}»...")
     chapters = await mangadex.get_chapters(manga_id, source_lang)
