@@ -12,7 +12,9 @@
     "model": "google/gemini-3.5-flash-lite",
     "fallback_provider": "deep-translator",
     "max_context_tokens": 32000,
-    "temperature": 0.3
+    "temperature": 0.3,
+    "vision": "gemini",
+    "vision_model": "gemini-flash-latest"
   },
   "fonts": {
     "dialogue": "fonts/anime/Anime Font.ttf",
@@ -23,6 +25,14 @@
     "sfx_mode": "english_reference",
     "auto_publish": false,
     "max_pages_per_batch": 20
+  },
+  "ocr": {
+    "paddle": false,
+    "colab_priority": false
+  },
+  "inpaint": {
+    "nano_banana": false,
+    "nano_banana_model": "gemini-3.1-flash-image"
   },
   "titles": [
     {

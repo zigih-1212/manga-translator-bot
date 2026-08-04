@@ -320,6 +320,24 @@ async def main():
 
     health_runner = await start_health_server()
 
+    editor_runner = None
+    if os.environ.get("EDITOR_PORT"):
+        try:
+            from editor.server import start_editor_server
+            editor_runner = await start_editor_server()
+            logger.info(f"Editor server started on :{os.environ.get('EDITOR_PORT')}")
+        except Exception as e:
+            logger.warning(f"Editor server failed to start: {e}")
+
+    dashboard_runner = None
+    if os.environ.get("DASHBOARD_PORT"):
+        try:
+            from dashboard.server import start_dashboard_server
+            dashboard_runner = await start_dashboard_server()
+            logger.info(f"Dashboard server started on :{os.environ.get('DASHBOARD_PORT')}")
+        except Exception as e:
+            logger.warning(f"Dashboard server failed to start: {e}")
+
     mark_bot_started()
     asyncio.create_task(_keepalive())
     asyncio.create_task(scheduler_loop(bot))
@@ -345,6 +363,16 @@ async def main():
     finally:
         await dp.stop_polling()
         await stop_health_server(health_runner)
+        if editor_runner:
+            try:
+                await editor_runner.cleanup()
+            except Exception:
+                pass
+        if dashboard_runner:
+            try:
+                await dashboard_runner.cleanup()
+            except Exception:
+                pass
         await bot.session.close()
         logger.info("Shutdown complete.")
 

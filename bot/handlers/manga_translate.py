@@ -7,14 +7,15 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, C
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from sources.mangadex import MangaDexSource
+from sources.router import SourceRouter
 from translator.pipeline import TranslationPipeline
 from translator.health import record_error
+from translator.webhooks import notify_chapter_done, notify_chapter_failed
 from cfg import CONFIG, save_config
 from bot.utils.telegram_helpers import send_text, send_document
 
 router = Router()
-mangadex = MangaDexSource()
+sources = SourceRouter()
 TEMP_DIR = Path(__file__).resolve().parent.parent.parent / "temp"
 active_tasks: dict[int, asyncio.Task] = {}
 
@@ -36,7 +37,7 @@ async def cmd_manga(message: Message, state: FSMContext):
         return
     await message.answer(f"🔍 Ищу «{query}»...")
     try:
-        results = await mangadex.search(query)
+        results = await sources.search(query)
     except Exception as e:
         await message.answer(f"Ошибка поиска: {e}. Попробуй позже.")
         return
@@ -53,8 +54,9 @@ async def cmd_manga(message: Message, state: FSMContext):
         label = r.title
         if not label or label == "Unknown":
             label = r.alt_titles[0] if r.alt_titles else "Unknown"
+        src_tag = {"mangadex": "MD", "naver": "NAVER"}.get(r.source, r.source.upper())
         buttons.append([InlineKeyboardButton(
-            text=f"✅ {label[:60]}",
+            text=f"✅ [{src_tag}] {label[:60]}",
             callback_data=f"mtr:{i}",
         )])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -64,6 +66,8 @@ async def cmd_manga(message: Message, state: FSMContext):
 
     for r in top3:
         caption = r.title if r.title != "Unknown" else (r.alt_titles[0] if r.alt_titles else "Unknown")
+        if r.source:
+            caption = f"[{r.source}] {caption}"
         if r.status:
             caption += f" [{r.status}]"
         if r.cover_url:
@@ -96,7 +100,7 @@ async def select_manga(callback: CallbackQuery, state: FSMContext):
     r = results[idx]
     lang_map = {"ko": "ko", "ja": "ja", "zh": "zh", "en": "en"}
     source_lang = lang_map.get(r.original_language, "ko")
-    await state.update_data(selected_manga=r, source_lang=source_lang)
+    await state.update_data(selected_manga=r, source_lang=source_lang, source=r.source)
     await callback.message.answer(
         f"✅ Выбрано: <b>{r.title}</b>\n"
         f"🌐 Язык оригинала: {r.original_language}\n\n"
@@ -142,13 +146,14 @@ async def process_range(message: Message, state: FSMContext):
             return
 
     chat_id = message.chat.id
+    source = data.get("source", "mangadex")
     await state.clear()
 
     if chat_id in active_tasks and not active_tasks[chat_id].done():
         await message.answer("Перевод уже запущен. Дождись завершения.")
         return
 
-    task = asyncio.create_task(run_translation(chat_id, r, chapter_nums, source_lang))
+    task = asyncio.create_task(run_translation(chat_id, r, chapter_nums, source_lang, source))
     active_tasks[chat_id] = task
     await message.answer(
         f"🚀 Начинаю перевод <b>{r.title}</b>:\n"
@@ -158,23 +163,25 @@ async def process_range(message: Message, state: FSMContext):
     )
 
 
-async def run_translation(chat_id: int, r, chapter_nums: list[str], source_lang: str):
+async def run_translation(chat_id: int, r, chapter_nums: list[str], source_lang: str, source: str = "mangadex"):
     manga_id = r.id
     try:
         for i, ch_num in enumerate(chapter_nums, 1):
             try:
                 await send_text(chat_id, f"📄 [{i}/{len(chapter_nums)}] Глава {ch_num}: перевод...")
-                pipeline = TranslationPipeline()
+                pipeline = TranslationPipeline(source=source)
                 page_paths = await pipeline.process_chapter(
                     mangadex_manga_id=manga_id,
                     chapter_number=ch_num,
                     source_lang=source_lang,
                     target_lang="en",
+                    source=source,
                 )
                 await pipeline.close()
 
                 if not page_paths:
                     await send_text(chat_id, f"❌ Глава {ch_num}: не удалось перевести (глава не найдена).")
+                    await notify_chapter_failed(r.title, ch_num, "глава не найдена")
                     continue
 
                 zip_path = TEMP_DIR / f"manga_{manga_id[:8]}_ch_{ch_num}.zip"
@@ -189,9 +196,11 @@ async def run_translation(chat_id: int, r, chapter_nums: list[str], source_lang:
                 )
                 zip_path.unlink(missing_ok=True)
                 await send_text(chat_id, f"✅ Глава {ch_num} готова!")
+                await notify_chapter_done(r.title, ch_num)
             except Exception as e:
                 record_error()
                 await send_text(chat_id, f"❌ Глава {ch_num}: ошибка: {e}")
+                await notify_chapter_failed(r.title, ch_num, str(e))
 
             if i < len(chapter_nums):
                 await asyncio.sleep(10)  # delay between chapters

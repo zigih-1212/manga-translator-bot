@@ -15,7 +15,6 @@ cfg/backups/
 # Extras (not needed for Railway)
 .devcontainer/
 codespace/
-kaggle/
 hf-spaces/
 check_gradio.py
 explore_*.py
@@ -24,3 +23,4 @@ test_*.pdf
 make_zip.py
 send_tg.py
 translator/perevod.bat
+.aider*

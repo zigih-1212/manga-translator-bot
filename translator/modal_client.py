@@ -231,8 +231,13 @@ def retry_async(max_attempts=3, base_delay=1.0, max_delay=10.0, jitter=True):
         return wrapper
     return decorator
 
+# Старый формат персонального токена (ak-/as-), слался как X-Modal-Token-Id/Secret
 MODAL_TOKEN_ID = os.getenv("MODAL_TOKEN_ID")
 MODAL_TOKEN_SECRET = os.getenv("MODAL_TOKEN_SECRET")
+# Новый формат workspace-ключей для вебхука/прокси (wk-/ws-),
+# слается как Modal-Key/Modal-Secret или Authorization: Bearer key.secret
+MODAL_KEY = os.getenv("MODAL_KEY")
+MODAL_SECRET = os.getenv("MODAL_SECRET")
 MODAL_APP_ID = os.getenv("MODAL_APP_ID", "dvybornyh332/manga-inpaint")
 MODAL_APP_URL = os.getenv("MODAL_APP_URL", "")
 
@@ -247,12 +252,15 @@ try:
 except ImportError:
     log.warning("Modal SDK not installed, using REST API fallback")
 
-MODAL_AVAILABLE = bool(MODAL_TOKEN_ID and MODAL_TOKEN_SECRET)
+# Доступен, если задан любой действующий набор учётных данных
+MODAL_AVAILABLE = bool(
+    (MODAL_KEY and MODAL_SECRET) or (MODAL_TOKEN_ID and MODAL_TOKEN_SECRET)
+)
 
 
 def inpaint_batch_sync(images: list[bytes], dilation: int = 5, radius: int = 10, masks: list[bytes] | None = None) -> list[bytes] | None:
-    if not MODAL_TOKEN_ID or not MODAL_TOKEN_SECRET:
-        log.warning("Modal not configured (missing MODAL_TOKEN_ID/SECRET)")
+    if not MODAL_AVAILABLE:
+        log.warning("Modal not configured (missing MODAL_TOKEN_ID/SECRET or MODAL_KEY/SECRET)")
         return None
 
     images_b64 = [base64.b64encode(img).decode() for img in images]
@@ -265,7 +273,7 @@ def inpaint_batch_sync(images: list[bytes], dilation: int = 5, radius: int = 10,
         try:
             import modal
             app_name = MODAL_APP_ID.split("/")[-1] if "/" in MODAL_APP_ID else "manga-inpaint"
-            f = modal.Function.lookup(app_name, "inpaint_batch")
+            f = modal.Function.from_name(app_name, "inpaint_batch")
             result_b64 = f.remote(images_b64, dilation=dilation, radius=radius, masks_b64=masks_b64)
             log.info("Modal GPU inpaint OK (%d images via SDK)", len(images))
             return [base64.b64decode(b64) for b64 in result_b64]
@@ -287,14 +295,20 @@ def _inpaint_batch_rest_sync(images_b64: list[str], dilation: int, radius: int, 
         payload = {"images_b64": images_b64, "dilation": dilation, "radius": radius}
         if masks_b64:
             payload["masks_b64"] = masks_b64
+        headers = {}
+        if MODAL_KEY and MODAL_SECRET:
+            # Новый формат вебхук/прокси-авторизации (wk-/ws-)
+            headers["Modal-Key"] = MODAL_KEY
+            headers["Modal-Secret"] = MODAL_SECRET
+        elif MODAL_TOKEN_ID and MODAL_TOKEN_SECRET:
+            # Legacy формат персонального токена
+            headers["X-Modal-Token-Id"] = MODAL_TOKEN_ID
+            headers["X-Modal-Token-Secret"] = MODAL_TOKEN_SECRET
         with httpx.Client(timeout=600) as client:
             resp = client.post(
                 MODAL_APP_URL,
                 json=payload,
-                headers={
-                    "X-Modal-Token-Id": MODAL_TOKEN_ID,
-                    "X-Modal-Token-Secret": MODAL_TOKEN_SECRET,
-                },
+                headers=headers,
             )
             resp.raise_for_status()
             result_b64 = resp.json()

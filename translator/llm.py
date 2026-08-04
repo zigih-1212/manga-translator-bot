@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import base64
 import hashlib
 import logging
 import re
@@ -309,6 +310,8 @@ class LLMTranslator:
         self.remote_client = None
         self.model = CONFIG["llm"]["model"]
         self.temperature = CONFIG["llm"]["temperature"]
+        self.vision_provider = CONFIG["llm"].get("vision", "off")  # off|gemini|openrouter
+        self.vision_model = CONFIG["llm"].get("vision_model", "")
         self._memory_context = ""
         self._memory_glossary = {}
         self._character_profiles = {}
@@ -345,9 +348,9 @@ class LLMTranslator:
         # Groq (Llama 70B) - free and good quality
         if GROQ_API_KEY:
             self._providers.append(("Groq (Llama 70B)", self._call_groq))
-        # Gemini 2.0 Flash - если Groq не сработал
+        # Gemini Flash - если Groq не сработал
         if GEMINI_API_KEY:
-            self._providers.append(("Gemini 2.0 Flash", self._call_gemini))
+            self._providers.append(("Gemini Flash", self._call_gemini))
         # OpenRouter - если предыдущие не сработали
         if OPENROUTER_API_KEY:
             self._providers.append(("OpenRouter Free", self._call_openrouter_free))
@@ -520,7 +523,7 @@ class LLMTranslator:
         }
         async with _make_client(60.0) as client:
             resp = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}",
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={GEMINI_API_KEY}",
                 headers={"Content-Type": "application/json"},
                 json=payload,
             )
@@ -539,6 +542,105 @@ class LLMTranslator:
             if result and len(result) == len(korean_texts):
                 return result
             return None
+
+    @staticmethod
+    def _detect_mime(data: bytes) -> str:
+        if data[:3] == b"\xff\xd8\xff":
+            return "image/jpeg"
+        if data[:4] == b"\x89PNG":
+            return "image/png"
+        if data[:6] in (b"GIF87a", b"GIF89a"):
+            return "image/gif"
+        if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            return "image/webp"
+        return "image/png"
+
+    @timeout_async(timeout=120.0)
+    @retry_async(max_attempts=2, base_delay=1.0, max_delay=5.0)
+    async def _call_gemini_vision(self, korean_texts, english_texts, page_number, page_image, source_lang="ko") -> list[dict] | None:
+        """Vision translation via Gemini (free tier). Needs a reachable Gemini endpoint."""
+        if not page_image:
+            return None
+        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(),
+                               self._memory_context, self._memory_glossary, source_lang=source_lang,
+                               character_profiles=self._character_profiles, rag_context=self._rag_context)
+        prompt += ("\n\nThe page image is attached. Use its visual context (who is speaking, panel layout, expressions, "
+                   "SFX placement) to produce accurate, natural Russian. Do not describe the image — return ONLY the JSON array.")
+        payload = {
+            "contents": [{"role": "user", "parts": [
+                {"inline_data": {"mime_type": self._detect_mime(page_image), "data": base64.b64encode(page_image).decode()}},
+                {"text": prompt},
+            ]}],
+            "systemInstruction": {"parts": [{"text": _system_prompt(source_lang)}]},
+            "generationConfig": {"temperature": self.temperature, "maxOutputTokens": 4096},
+        }
+        async with _make_client(120.0) as client:
+            model = self.vision_model or "gemini-flash-latest"
+            resp = await client.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}",
+                headers={"Content-Type": "application/json"},
+                json=payload,
+            )
+            if resp.status_code in (429, 403):
+                log.warning("Gemini vision → %s, skipping", resp.status_code)
+                return None
+            resp.raise_for_status()
+            data = resp.json()
+            candidates = data.get("candidates", [])
+            if not candidates:
+                return None
+            content = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+            result = _parse_json_response(content)
+            if result and len(result) == len(korean_texts):
+                return result
+            return None
+
+    @timeout_async(timeout=120.0)
+    @retry_async(max_attempts=2, base_delay=1.0, max_delay=5.0)
+    async def _call_openrouter_vision(self, korean_texts, english_texts, page_number, page_image, source_lang="ko") -> list[dict] | None:
+        """Vision translation via OpenRouter (needs a vision-capable model id in llm.vision_model)."""
+        if not page_image or not self.vision_model:
+            return None
+        prompt = _build_prompt(korean_texts, english_texts, page_number, self.context_pages, self._build_glossary_dict(),
+                               self._memory_context, self._memory_glossary, source_lang=source_lang,
+                               character_profiles=self._character_profiles, rag_context=self._rag_context)
+        prompt += ("\n\nThe page image is attached. Use its visual context to produce accurate, natural Russian. "
+                   "Return ONLY the JSON array.")
+        mime = self._detect_mime(page_image)
+        data_url = f"data:{mime};base64,{base64.b64encode(page_image).decode()}"
+        payload = {
+            "model": self.vision_model,
+            "messages": [
+                {"role": "system", "content": _system_prompt(source_lang)},
+                {"role": "user", "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ]},
+            ],
+            "temperature": self.temperature,
+            "max_tokens": 4096,
+        }
+        async with _make_client(120.0) as client:
+            resp = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"},
+                json=payload,
+            )
+            if resp.status_code == 429:
+                return None
+            resp.raise_for_status()
+            content = resp.json()["choices"][0]["message"]["content"]
+            result = _parse_json_response(content)
+            if result and len(result) == len(korean_texts):
+                return result
+            return None
+
+    async def _call_vision(self, korean_texts, english_texts, page_number, page_image, source_lang) -> list[dict] | None:
+        if self.vision_provider == "gemini":
+            return await self._call_gemini_vision(korean_texts, english_texts, page_number, page_image, source_lang)
+        if self.vision_provider == "openrouter":
+            return await self._call_openrouter_vision(korean_texts, english_texts, page_number, page_image, source_lang)
+        return None
 
     @timeout_async(timeout=60.0)
     @circuit_breaker(max_failures=3, reset_timeout=30)
@@ -588,7 +690,7 @@ class LLMTranslator:
                     results.append({"id": i + 1, "ru": text})
             return results
 
-    async def translate_page(self, korean_texts, english_texts=None, page_number=1, manga_id=None, chapter=None, source_lang="ko") -> list[dict]:
+    async def translate_page(self, korean_texts, english_texts=None, page_number=1, manga_id=None, chapter=None, source_lang="ko", page_image: bytes | None = None) -> list[dict]:
         if not korean_texts:
             return []
         self._source_lang = source_lang
@@ -608,6 +710,18 @@ class LLMTranslator:
         hard_glossary = self._build_glossary_dict()
         prompt_texts = self._apply_hard_glossary(korean_texts, hard_glossary)
 
+        # Vision-first translation (best quality, uses page image for context).
+        # Activates only when llm.vision is set AND a vision API is reachable.
+        if page_image and self.vision_provider in ("gemini", "openrouter"):
+            try:
+                vision = await self._call_vision(prompt_texts, english_texts or [], page_number, page_image, source_lang)
+                if vision:
+                    log.info("Vision translation used (%s)", self.vision_provider)
+                    self.add_context(korean_texts)
+                    return await self._finalize(korean_texts, vision, source_lang)
+            except Exception as e:
+                log.warning("Vision translation failed, falling back to text chain: %s", e)
+
         for name, call_fn in self._providers:
             try:
                 if name == "deep-translator":
@@ -618,22 +732,25 @@ class LLMTranslator:
                     log.warning("%s → rate limited, next...", name)
                     continue
                 self.add_context(korean_texts)
-                result = self._apply_hard_glossary_cleanup(result)
-                result = await self._self_correct(korean_texts, result, source_lang)
-                # Post-validation: fix trivial issues, else fallback to deep-translator
-                result = self._validate_and_fix(korean_texts, result, source_lang)
-                for i, ko in enumerate(korean_texts):
-                    if i < len(result):
-                        result[i]["ko"] = ko
-                result = self._apply_post_replace(result)
-                TranslationCache.put(korean_texts, source_lang, result)
-                return result
+                return await self._finalize(korean_texts, result, source_lang)
             except Exception as e:
                 log.error("%s → error: %s", name, e)
                 continue
 
         log.error("All providers failed, returning originals")
         return [{"id": i + 1, "ko": t, "ru": t} for i, t in enumerate(korean_texts)]
+
+    async def _finalize(self, korean_texts, result: list[dict], source_lang: str) -> list[dict]:
+        """Shared post-processing: glossary cleanup, self-correction, validation, caching."""
+        result = self._apply_hard_glossary_cleanup(result)
+        result = await self._self_correct(korean_texts, result, source_lang)
+        result = self._validate_and_fix(korean_texts, result, source_lang)
+        for i, ko in enumerate(korean_texts):
+            if i < len(result):
+                result[i]["ko"] = ko
+        result = self._apply_post_replace(result)
+        TranslationCache.put(korean_texts, source_lang, result)
+        return result
 
     async def translate_sfx(self, korean_sfx, english_sfx="") -> str:
         if english_sfx:

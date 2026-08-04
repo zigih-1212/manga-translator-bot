@@ -1,10 +1,10 @@
 # Manga Translator Bot
 
-Автоматический Telegram-бот для перевода манги с MangaDex на русский язык. Бесплатно работает на Railway (CPU) с опциональным GPU-инпейнтом через Modal.
+Автоматический Telegram-бот для перевода манги на русский язык. Источники: MangaDex и Naver Webtoon. Бесплатно работает на Railway (CPU) с опциональным GPU-инпейнтом через Modal.
 
 ## Возможности
 
-- Загрузка глав с MangaDex
+- Загрузка глав с MangaDex и Naver Webtoon (единый роутер источников)
 - OCR текста (ocr.space через Kaggle/Colab + локальный Manga-OCR ONNX для японского)
 - Перевод через мульти-провайдерную цепочку:
   - Remote server (Kaggle/Colab, основной, rate-limited)
@@ -19,6 +19,9 @@
 - Продвинутый рендер: кириллические шрифты, вертикальный японский текст, warp-наклон по полигону OCR
 - Пост-валидатор переводов + авто-исправление
 - JSON-логирование, health-сервер `/health` `/metrics`, Telegram-алерты
+- Web Translation Editor — правка переведённого текста в браузере с перерисовкой страниц
+- Web Dashboard — метрики, очередь, активные задачи и ошибки в браузере
+- Webhooks — HTTP-уведомления о готовности/ошибках глав
 - Graceful shutdown, авто-ретраи
 
 ## Фазы разработки
@@ -55,6 +58,9 @@ OPENROUTER_API_KEY=...  # необязательно
 REMOTE_SERVER_URL=...   # URL Kaggle/Colab-сервера OCR/перевода
 DATA_DIR=/app/data/config  # Railway Volume для конфигов
 HEALTH_PORT=8080
+EDITOR_PORT=8090        # запускает Web Translation Editor при старте бота
+DASHBOARD_PORT=8091     # запускает Web Dashboard при старте бота
+WEBHOOK_URLS=           # через запятую URL для HTTP-уведомлений о готовности глав
 METRICS_REPORT_INTERVAL=3600
 ```
 
@@ -86,6 +92,50 @@ modal deploy app.py
 ```
 
 Бот автоматически использует Modal для инпейнта, если он доступен, иначе падает на LaMa (CPU).
+
+### Web Translation Editor
+
+Позволяет править переведённый текст пузырей прямо в браузере и перерисовывать страницы.
+
+Авто-запуск вместе с ботом (требуется `EDITOR_PORT` в окружении), либо вручную:
+
+```bash
+python -m editor.server
+# открыть http://localhost:8090/
+```
+
+Данные редактора сохраняются во `temp/editor/{manga_id}/{chapter}/` в момент перевода главы:
+`NNN.src.png` — оригинал, `NNN.out.png` — результат, `NNN.json` — пузыри (bbox/текст/шрифт/угол).
+
+### Web Dashboard
+
+Показывает статус бота: uptime, метрики (главы/страницы/LLM/OCR), очередь переводов,
+активные задачи и последние ошибки. Авто-обновление каждые 5 секунд.
+
+Авто-запуск вместе с ботом (требуется `DASHBOARD_PORT` в окружении), либо вручную:
+
+```bash
+python -m dashboard.server
+# открыть http://localhost:8091/
+```
+
+### Webhooks
+
+При завершении или ошибке перевода главы бот отправляет HTTP POST с JSON на каждый
+URL из `cfg/config.json` (`webhooks.urls`) или из переменной `WEBHOOK_URLS` (через запятую).
+Формат:
+
+```json
+{
+  "event": "chapter_done",
+  "manga": "Название",
+  "chapter": "7",
+  "zip_url": "",
+  "status": "done"
+}
+```
+
+Для ошибок — `event: "chapter_failed"` и поле `error`. Доставка с ретраями (3 попытки).
 
 ## CI
 

@@ -42,7 +42,8 @@ def _paths(manga_id: str, chapter: str, page: int):
     }
 
 
-def save_page(manga_id: str, chapter: str, page: int, src_data: bytes, out_data: bytes, page_meta: dict):
+def save_page(manga_id: str, chapter: str, page: int, src_data: bytes, out_data: bytes, bubbles: list[dict], img_w: int = 0, img_h: int = 0):
+    """Сохранить страницу для редактора: оригинал, результат и метаданные пузырей."""
     p = _paths(manga_id, chapter, page)
     p["src"].write_bytes(src_data)
     p["out"].write_bytes(out_data)
@@ -51,7 +52,9 @@ def save_page(manga_id: str, chapter: str, page: int, src_data: bytes, out_data:
             "manga_id": manga_id,
             "chapter": chapter,
             "page": page,
-            **page_meta,
+            "img_w": img_w,
+            "img_h": img_h,
+            "bubbles": bubbles,
         }, f, ensure_ascii=False, indent=1)
 
 
@@ -71,21 +74,31 @@ def load_page(manga_id: str, chapter: str, page: int) -> dict | None:
     return data
 
 
-def save_edits(manga_id: str, chapter: str, page: int, bubble_id: int, ru: str):
-    """Применить одну правку перевода и обновить rendered-страницу."""
-    if not ru.strip() and bubble_id >= (bubble_edit["edited"] and None):
-        pass
+def save_edits(manga_id: str, chapter: str, page: int, bubble_id: int, ru: str) -> dict | None:
+    """Применить одну правку перевода (только текст) и вернуть обновлённые данные."""
     p = _paths(manga_id, chapter, page)
     if not p["meta"].exists():
         return None
     with open(p["meta"], encoding="utf-8") as f:
         data = json.load(f)
-    bubbles = data["bubbles"]
-    for b in bubbles:
+    for b in data.get("bubbles", []):
         if b.get("id") == bubble_id:
             b["text"] = ru.strip()
             b["edited"] = True
             break
+    with open(p["meta"], "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=1)
+    return data
+
+
+def update_bubbles(manga_id: str, chapter: str, page: int, bubbles: list[dict]) -> dict | None:
+    """Полностью заменить список пузырей (используется после перерисовки)."""
+    p = _paths(manga_id, chapter, page)
+    if not p["meta"].exists():
+        return None
+    with open(p["meta"], encoding="utf-8") as f:
+        data = json.load(f)
+    data["bubbles"] = bubbles
     with open(p["meta"], "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=1)
     return data
@@ -104,12 +117,12 @@ def list_chapters() -> list[dict]:
             metas = list(ch.glob("*.json"))
             if not metas:
                 continue
-            pages = sorted(int(mm.stem.split(".")[0]) for mm in metas)
+            pages = sorted(int(mm.stem) for mm in metas)
             out.append({"manga_id": m.name, "chapter": ch.name, "pages": pages})
     return out
 
 
-def build_zip(manga_id: str, chapter: str, session_id: int | None = None) -> bytes:
+def build_zip(manga_id: str, chapter: str) -> bytes:
     """ZIP текущих (возможно отредактированных) страниц."""
     buf = BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:

@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manga Translation Editor</title>
+    <style>
+        body { font-family: sans-serif; margin: 0; padding: 20px; background-color: #f4f4f4; }
+        .container { max-width: 1200px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1 { text-align: center; color: #333; }
+        #chapter-list, #page-navigation { margin-bottom: 20px; text-align: center; }
+        #chapter-list select, #page-navigation button, #page-navigation select { padding: 8px; margin: 5px; border-radius: 4px; border: 1px solid #ddd; }
+        #editor-area { position: relative; display: inline-block; border: 1px solid #ddd; margin: auto; display: block; }
+        #editor-image { max-width: 100%; height: auto; display: block; }
+        .bubble-overlay { position: absolute; border: 1px dashed red; cursor: pointer; background-color: rgba(255, 255, 0, 0.2); }
+        .bubble-text-editor { position: absolute; background: white; border: 1px solid #ccc; padding: 5px; z-index: 100; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+        .bubble-text-editor textarea { width: 200px; height: 100px; border: 1px solid #eee; margin-bottom: 5px; }
+        .bubble-text-editor button { padding: 5px 10px; margin-right: 5px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        .bubble-text-editor button:hover { background-color: #0056b3; }
+        .actions button { padding: 10px 15px; margin-top: 20px; background-color: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        .actions button:hover { background-color: #218838; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Редактор перевода манги</h1>
+
+        <div id="chapter-list">
+            <label for="chapters">Выберите главу:</label>
+            <select id="chapters"></select>
+            <button id="load-chapter">Загрузить</button>
+        </div>
+
+        <div id="page-navigation">
+            <button id="prev-page">Предыдущая</button>
+            <select id="pages"></select>
+            <button id="next-page">Следующая</button>
+        </div>
+
+        <div id="editor-area">
+            <img id="editor-image" src="" alt="Страница манги">
+            <!-- Здесь будут динамически добавляться оверлеи для пузырей -->
+        </div>
+
+        <div class="actions">
+            <button id="save-edits">Сохранить правки</button>
+            <button id="rerender-page">Перерисовать страницу</button>
+            <button id="download-zip">Скачать главу (ZIP)</button>
+        </div>
+    </div>
+
+    <script>
+        const chapterSelect = document.getElementById('chapters');
+        const loadChapterBtn = document.getElementById('load-chapter');
+        const prevPageBtn = document.getElementById('prev-page');
+        const pageSelect = document.getElementById('pages');
+        const nextPageBtn = document.getElementById('next-page');
+        const editorImage = document.getElementById('editor-image');
+        const editorArea = document.getElementById('editor-area');
+        const saveEditsBtn = document.getElementById('save-edits');
+        const rerenderPageBtn = document.getElementById('rerender-page');
+        const downloadZipBtn = document.getElementById('download-zip');
+
+        let currentMangaId = null;
+        let currentChapter = null;
+        let currentPage = null;
+        let pageData = null; // Store fetched page metadata
+
+        async function fetchChapters() {
+            const response = await fetch('/api/chapters');
+            const chapters = await response.json();
+            chapterSelect.innerHTML = '';
+            chapters.forEach(chapter => {
+                const option = document.createElement('option');
+                option.value = `${chapter.manga_id}|${chapter.chapter}`;
+                option.textContent = `${chapter.manga_id} - ${chapter.chapter}`;
+                chapterSelect.appendChild(option);
+            });
+        }
+
+        async function loadChapter() {
+            const [mangaId, chapter] = chapterSelect.value.split('|');
+            currentMangaId = mangaId;
+            currentChapter = chapter;
+            currentPage = null; // Reset current page
+            pageSelect.innerHTML = '';
+
+            // Fetch page numbers for the selected chapter
+            const response = await fetch(`/api/chapters`); // Re-fetch to get updated page list if needed
+            const chapters = await response.json();
+            const selectedChapter = chapters.find(c => c.manga_id === mangaId && c.chapter === chapter);
+
+            if (selectedChapter && selectedChapter.pages.length > 0) {
+                selectedChapter.pages.forEach(pageNum => {
+                    const option = document.createElement('option');
+                    option.value = pageNum;
+                    option.textContent = `Страница ${pageNum}`;
+                    pageSelect.appendChild(option);
+                });
+                currentPage = selectedChapter.pages[0];
+                await loadPage(currentPage);
+            } else {
+                editorImage.src = '';
+                editorArea.querySelectorAll('.bubble-overlay').forEach(el => el.remove());
+                alert('Для этой главы нет страниц.');
+            }
+        }
+
+        async function loadPage(pageNum) {
+            if (!currentMangaId || !currentChapter || !pageNum) return;
+            currentPage = pageNum;
+            pageSelect.value = pageNum;
+
+            editorImage.src = `/img?manga=${currentMangaId}&chapter=${currentChapter}&page=${currentPage}&kind=out`;
+
+            // Clear existing overlays
+            editorArea.querySelectorAll('.bubble-overlay').forEach(el => el.remove());
+
+            // Fetch page metadata (bubbles)
+            const response = await fetch(`/api/page?manga=${currentMangaId}&chapter=${currentChapter}&page=${currentPage}`);
+            pageData = await response.json();
+            renderBubbles(pageData.bubbles);
+        }
+
+        function renderBubbles(bubbles) {
+            editorArea.style.width = editorImage.naturalWidth + 'px';
+            editorArea.style.height = editorImage.naturalHeight + 'px';
+            editorImage.style.width = editorImage.naturalWidth + 'px';
+            editorImage.style.height = editorImage.naturalHeight + 'px';
+
+            bubbles.forEach(bubble => {
+                const overlay = document.createElement('div');
+                overlay.classList.add('bubble-overlay');
+                overlay.style.left = `${bubble.bbox[0]}px`;
+                overlay.style.top = `${bubble.bbox[1]}px`;
+                overlay.style.width = `${bubble.bbox[2] - bubble.bbox[0]}px`;
+                overlay.style.height = `${bubble.bbox[3] - bubble.bbox[1]}px`;
+                overlay.dataset.bubbleId = bubble.id;
+                overlay.dataset.originalText = bubble.ko; // Store original Korean text
+                overlay.dataset.translation = bubble.text; // Store current Russian translation
+                overlay.title = `Original: ${bubble.ko}\nTranslation: ${bubble.text}`;
+
+                overlay.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    showTextEditor(overlay, bubble);
+                });
+                editorArea.appendChild(overlay);
+            });
+        }
+
+        function showTextEditor(overlay, bubble) {
+            let editor = document.querySelector('.bubble-text-editor');
+            if (editor) editor.remove();
+
+            editor = document.createElement('div');
+            editor.classList.add('bubble-text-editor');
+            editor.style.left = `${overlay.offsetLeft}px`;
+            editor.style.top = `${overlay.offsetTop + overlay.offsetHeight + 5}px`;
+
+            const originalTextDiv = document.createElement('div');
+            originalTextDiv.textContent = `Оригинал: ${bubble.ko}`;
+            editor.appendChild(originalTextDiv);
+
+            const textarea = document.createElement('textarea');
+            textarea.value = bubble.text; // Current translation
+            editor.appendChild(textarea);
+
+            const saveBtn = document.createElement('button');
+            saveBtn.textContent = 'Сохранить';
+            saveBtn.onclick = async () => {
+                const newText = textarea.value;
+                // Update local pageData
+                const bubbleIndex = pageData.bubbles.findIndex(b => b.id === bubble.id);
+                if (bubbleIndex !== -1) {
+                    pageData.bubbles[bubbleIndex].text = newText;
+                    pageData.bubbles[bubbleIndex].edited = true;
+                    overlay.dataset.translation = newText; // Update dataset
+                    overlay.title = `Original: ${bubble.ko}\nTranslation: ${newText}`; // Update title
+                }
+                await saveEditToServer(bubble.id, newText); // Send edit to server
+                editor.remove();
+            };
+            editor.appendChild(saveBtn);
+
+            const cancelBtn = document.createElement('button');
+            cancelBtn.textContent = 'Отмена';
+            cancelBtn.onclick = () => editor.remove();
+            editor.appendChild(cancelBtn);
+
+            editorArea.appendChild(editor);
+        }
+
+        async function saveEditToServer(bubbleId, newText) {
+            if (!currentMangaId || !currentChapter || !currentPage) return;
+            await fetch('/api/page/edit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    manga_id: currentMangaId,
+                    chapter: currentChapter,
+                    page: currentPage,
+                    bubble_id: bubbleId,
+                    ru: newText
+                })
+            });
+            // No need to re-render immediately, as rerenderPageBtn will handle it
+        }
+
+        async function handleSaveEdits() {
+            alert('Изменения сохранены локально. Для их применения на изображении нажмите "Перерисовать страницу".');
+        }
+
+        async function handleRerenderPage() {
+            if (!currentMangaId || !currentChapter || !currentPage) return;
+            alert('Перерисовка страницы...');
+            const response = await fetch('/api/page/render', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    manga_id: currentMangaId,
+                    chapter: currentChapter,
+                    page: currentPage,
+                    edits: pageData.bubbles.filter(b => b.edited).map(b => ({ id: b.id, text: b.text })) // Send only edited bubbles
+                })
+            });
+            if (response.ok) {
+                // Reload the page to show the new rendered image
+                await loadPage(currentPage);
+                alert('Страница успешно перерисована!');
+            } else {
+                alert('Ошибка при перерисовке страницы.');
+            }
+        }
+
+        async function handleDownloadZip() {
+            if (!currentMangaId || !currentChapter) return;
+            alert('Подготовка ZIP-архива...');
+            const response = await fetch(`/api/zip?manga=${currentMangaId}&chapter=${currentChapter}`);
+            if (response.ok) {
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                a.download = `${currentMangaId}_${currentChapter}.zip`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                alert('ZIP-архив готов к загрузке!');
+            } else {
+                alert('Ошибка при создании ZIP-архива.');
+            }
+        }
+
+        // Event Listeners
+        loadChapterBtn.addEventListener('click', loadChapter);
+        pageSelect.addEventListener('change', (event) => loadPage(event.target.value));
+        prevPageBtn.addEventListener('click', () => {
+            const currentIndex = pageData.pages.indexOf(currentPage);
+            if (currentIndex > 0) {
+                loadPage(pageData.pages[currentIndex - 1]);
+            }
+        });
+        nextPageBtn.addEventListener('click', () => {
+            const currentIndex = pageData.pages.indexOf(currentPage);
+            if (currentIndex < pageData.pages.length - 1) {
+                loadPage(pageData.pages[currentIndex + 1]);
+            }
+        });
+        saveEditsBtn.addEventListener('click', handleSaveEdits);
+        rerenderPageBtn.addEventListener('click', handleRerenderPage);
+        downloadZipBtn.addEventListener('click', handleDownloadZip);
+
+        // Initial load
+        fetchChapters();
+    </script>
+</body>
+</html>

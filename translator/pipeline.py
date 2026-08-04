@@ -10,20 +10,23 @@ import cv2
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 
-from sources.mangadex import MangaDexSource
+from sources.router import SourceRouter
 from translator.llm import LLMTranslator
 from translator.renderer import TextRenderer, _classify_font_style, _is_caption_region, _polygon_angle
 from translator.kaggle_client import KaggleClient
 from translator.inpainter import LaMaInpainter
 from translator.bubbles import get_bubble_bounds, build_mask, build_smart_mask
 from translator.modal_client import inpaint_batch_sync, MODAL_AVAILABLE
+from translator.colab_client import ColabClient
 from translator.sfx_detector import annotate_sfx, is_sfx_text
 from translator.preprocess import preprocess_page, sauvola
 # from translator.upscaler import RealESRGANUpscaler  # РћС‚РєР»СЋС‡РµРЅРѕ РґР»СЏ СЌРєРѕРЅРѕРјРёРё RAM
-from cfg import TEMP_DIR
+from cfg import TEMP_DIR, CONFIG
 
 from cfg.memory import save_translations, _extract_speaker
 from translator.health import inc_metric, record_error, record_ocr, record_llm
+from translator.log import log
+from editor import store as editor_store
 
 # Chunk size for processing chapters in chunks to avoid OOM
 CHUNK_SIZE = 15  # pages per chunk
@@ -199,14 +202,26 @@ class PageRendered:
 
 
 class TranslationPipeline:
-    def __init__(self):
-        self.mangadex = MangaDexSource()
+    def __init__(self, source: str = "mangadex"):
+        self.router = SourceRouter()
+        self.source_name = source
         self.translator = LLMTranslator()
         self.renderer = TextRenderer()
         self.kaggle = KaggleClient()
+        self.colab = ColabClient()
         self.inpainter = LaMaInpainter()
         self.progress_callback = None
         self._bg_mask = None
+        # Nano Banana (Gemini image model) — optional high-quality cleanup, off by default
+        self.nano_banana = None
+        try:
+            inpaint_cfg = CONFIG.get("inpaint", {})
+            if inpaint_cfg.get("nano_banana"):
+                from translator.nano_banana import NanoBananaClient
+                self.nano_banana = NanoBananaClient(model=inpaint_cfg.get("nano_banana_model", "gemini-3.1-flash-image"))
+                log.info("Nano Banana inpainting enabled (%s)", self.nano_banana.model)
+        except Exception as e:
+            log.warning("Nano Banana init failed: %s", e)
         # self._upscaler = RealESRGANUpscaler()  # РћС‚РєР»СЋС‡РµРЅРѕ РґР»СЏ СЌРєРѕРЅРѕРјРёРё RAM
 
     def on_progress(self, callback):
@@ -280,6 +295,41 @@ class TranslationPipeline:
         soft = (soft / 255.0)[..., None]
         return (result.astype(np.float32) * soft + img_bgr.astype(np.float32) * (1.0 - soft)).clip(0, 255).astype(np.uint8)
 
+    def _inpaint_page(self, filled_img: np.ndarray, remaining: np.ndarray) -> np.ndarray:
+        """Inpaint chain: Modal (GPU) -> Colab (GPU) -> Nano Banana -> LaMa (CPU)."""
+        _, img_bytes = cv2.imencode(".png", filled_img)
+        _, mask_bytes = cv2.imencode(".png", remaining)
+        if MODAL_AVAILABLE:
+            try:
+                modal_result = inpaint_batch_sync(
+                    [img_bytes.tobytes()],
+                    masks=[mask_bytes.tobytes()],
+                )
+                if modal_result:
+                    return cv2.imdecode(np.frombuffer(modal_result[0], np.uint8), cv2.IMREAD_COLOR)
+            except Exception as e:
+                log.warning("Modal inpainting failed: %s", e)
+        if self.colab.available:
+            try:
+                colab_result = self.colab.inpaint_batch(
+                    [img_bytes.tobytes()],
+                    masks=[mask_bytes.tobytes()],
+                )
+                if colab_result:
+                    log.info("Colab inpainting used as fallback")
+                    return cv2.imdecode(np.frombuffer(colab_result[0], np.uint8), cv2.IMREAD_COLOR)
+            except Exception as e:
+                log.warning("Colab inpainting failed: %s", e)
+        if self.nano_banana is not None:
+            try:
+                nb_result = self.nano_banana.clean_page(img_bytes.tobytes(), mask_bytes.tobytes())
+                if nb_result:
+                    log.info("Nano Banana inpainting used")
+                    return cv2.imdecode(np.frombuffer(nb_result, np.uint8), cv2.IMREAD_COLOR)
+            except Exception as e:
+                log.warning("Nano Banana inpainting failed: %s", e)
+        return self.inpainter.inpaint(filled_img, remaining)
+
     @staticmethod
     def _auto_rotate(page_data: bytes) -> bytes:
         try:
@@ -313,27 +363,29 @@ class TranslationPipeline:
         chapter_number: str,
         source_lang: str = "ko",
         target_lang: str = "en",
+        source: str | None = None,
     ) -> list[bytes]:
+        source = source or self.source_name
         work_dir = TEMP_DIR / f"chapter_{chapter_number}"
         work_dir.mkdir(parents=True, exist_ok=True)
 
         await self.kaggle.init()
 
         await self._report(f"РџРѕРёСЃРє {source_lang} РіР»Р°РІС‹ {chapter_number}...", 0, 100)
-        src_chapter = await self.mangadex.find_chapter_by_number(
-            mangadex_manga_id, chapter_number, source_lang
+        src_chapter = await self.router.find_chapter_by_number(
+            source, mangadex_manga_id, chapter_number, source_lang
         )
         if not src_chapter:
             await self._report(f"Р“Р»Р°РІР° {chapter_number} ({source_lang}) РЅРµ РЅР°Р№РґРµРЅР°!", 0, 1)
             return []
 
         await self._report(f"РџРѕРёСЃРє {target_lang} РіР»Р°РІС‹ {chapter_number}...", 2, 100)
-        en_chapter = await self.mangadex.find_chapter_by_number(
-            mangadex_manga_id, chapter_number, target_lang
+        en_chapter = await self.router.find_chapter_by_number(
+            source, mangadex_manga_id, chapter_number, target_lang
         )
 
         await self._report(f"РџРѕР»СѓС‡Р°РµРј СЃРїРёСЃРѕРє СЃС‚СЂР°РЅРёС† {source_lang}...", 5, 100)
-        src_pages = await self.mangadex.get_pages(src_chapter.id)
+        src_pages = await self.router.get_pages(source, src_chapter.id, mangadex_manga_id)
         total_pages = len(src_pages)
         if not total_pages:
             await self._report("РќРµС‚ СЃС‚СЂР°РЅРёС†!", 0, 1)
@@ -342,7 +394,7 @@ class TranslationPipeline:
         en_page_map = {}
         if en_chapter:
             await self._report(f"РџРѕР»СѓС‡Р°РµРј СЃРїРёСЃРѕРє СЃС‚СЂР°РЅРёС† {target_lang}...", 7, 100)
-            en_pages = await self.mangadex.get_pages(en_chapter.id)
+            en_pages = await self.router.get_pages(source, en_chapter.id, mangadex_manga_id)
             en_page_map = {p.index: p for p in en_pages}
 
         self.translator.clear_context()
@@ -356,6 +408,7 @@ class TranslationPipeline:
 
         # Process in chunks to avoid OOM
         all_final_paths = []
+        chapter_translations: list[dict] = []
 
         for chunk_start in range(0, total_pages, CHUNK_SIZE):
             chunk_end = min(chunk_start + CHUNK_SIZE, total_pages)
@@ -386,10 +439,10 @@ class TranslationPipeline:
                     async with sem:
                         try:
                             global_index = chunk_start + i
-                            src_data = await self.mangadex.download_page(src_pages[global_index])
+                            src_data = await self.router.download_page(source, src_pages[global_index])
                             en_data = None
                             if global_index in en_page_map:
-                                en_data = await self.mangadex.download_page(en_page_map[global_index])
+                                en_data = await self.router.download_page(source, en_page_map[global_index])
                             # Get image dimensions
                             tmp_img = Image.open(io.BytesIO(src_data))
                             img_w, img_h = tmp_img.size
@@ -584,6 +637,7 @@ class TranslationPipeline:
                             manga_id=mangadex_manga_id,
                             chapter=chapter_number,
                             source_lang=source_lang,
+                            page_image=item["src_data"],
                         )
                     except Exception as e:
                         await self._report(f"РџРµСЂРµРІРѕРґ РѕС€РёР±РєР° СЃС‚СЂ. {chunk_start+idx+1}: {e}", 
@@ -601,6 +655,8 @@ class TranslationPipeline:
                         if is_sfx:
                             t["ru"] = ko
                             t["sfx"] = True
+
+                    chapter_translations.extend(translations)
 
                     await translated_queue.put({
                         "index": idx,
@@ -681,7 +737,8 @@ class TranslationPipeline:
                                         angle = _polygon_angle(poly)
                                         break
                                 all_bubble_bboxes.append(bubble_bbox)
-                                bubble_pairs.append((bubble_bbox, ru, is_bubble, text_bbox, angle))
+                                ko = translations[g_idx].get("ko", "") or (item.get("grouped_ko") or [""])[min(g_idx, len(item.get("grouped_ko") or [""]) - 1)]
+                                bubble_pairs.append((g_idx, bubble_bbox, ru, ko, is_bubble, text_bbox, angle))
 
                             if not bubble_pairs:
                                 async with results_lock:
@@ -722,26 +779,15 @@ class TranslationPipeline:
                             if cv2.countNonZero(remaining) == 0:
                                 clean_img = Image.fromarray(cv2.cvtColor(filled_img, cv2.COLOR_BGR2RGB))
                             else:
-                                inpainted_bgr = None
-                                if MODAL_AVAILABLE:
-                                    _, img_bytes = cv2.imencode(".png", filled_img)
-                                    # Pass the smart mask so GPU inpaint covers exactly the text
-                                    _, mask_bytes = cv2.imencode(".png", remaining)
-                                    modal_result = inpaint_batch_sync(
-                                        [img_bytes.tobytes()],
-                                        masks=[mask_bytes.tobytes()],
-                                    )
-                                    if modal_result:
-                                        inpainted_bgr = cv2.imdecode(np.frombuffer(modal_result[0], np.uint8), cv2.IMREAD_COLOR)
-                                if inpainted_bgr is None:
-                                    inpainted_bgr = self.inpainter.inpaint(filled_img, remaining)
+                                inpainted_bgr = self._inpaint_page(filled_img, remaining)
                                 # Post-process: match inpainted lightness to bubble border
                                 inpainted_bgr = self._postprocess_inpaint(cv_img, inpainted_bgr, remaining)
                                 clean_img = Image.fromarray(cv2.cvtColor(inpainted_bgr, cv2.COLOR_BGR2RGB))
                                 del inpainted_bgr
                             del mask, filled_img
 
-                            for bubble_bbox, text, is_bubble, text_bbox, angle in bubble_pairs:
+                            bubbles_meta = []
+                            for g_idx, bubble_bbox, text, ko, is_bubble, text_bbox, angle in bubble_pairs:
                                 try:
                                     # Classify caption (rectangular) vs dialogue (round bubble)
                                     font_type = "dialogue"
@@ -756,6 +802,17 @@ class TranslationPipeline:
                                         clean_img, bubble_bbox, text, font_type=font_type, is_bubble=is_bubble,
                                         original_img=img, angle=angle,
                                     )
+                                    bubbles_meta.append({
+                                        "id": g_idx,
+                                        "bbox": list(bubble_bbox),
+                                        "text_bbox": list(text_bbox),
+                                        "is_bubble": bool(is_bubble),
+                                        "angle": angle,
+                                        "font_type": font_type,
+                                        "text": text,
+                                        "ko": ko,
+                                        "edited": False,
+                                    })
                                 except Exception:
                                     continue
 
@@ -763,6 +820,19 @@ class TranslationPipeline:
                             clean_img.save(buf, format="PNG")
                             out_data = buf.getvalue()
                             del img, clean_img, buf
+
+                            # Сохранение данных для веб-редактора
+                            try:
+                                await asyncio.to_thread(
+                                    editor_store.save_page,
+                                    mangadex_manga_id, chapter_number,
+                                    chunk_start + idx,
+                                    src_data, out_data,
+                                    bubbles_meta,
+                                    w, h,
+                                )
+                            except Exception:
+                                pass
 
                             async with results_lock:
                                 rendered_results[idx] = out_data
@@ -777,20 +847,12 @@ class TranslationPipeline:
                                 if cv2.countNonZero(remaining) == 0:
                                     clean_img = Image.fromarray(cv2.cvtColor(filled_img, cv2.COLOR_BGR2RGB))
                                 else:
-                                    inpainted_bgr = None
-                                    if MODAL_AVAILABLE:
-                                        _, img_bytes = cv2.imencode(".png", filled_img)
-                                        _, mask_bytes = cv2.imencode(".png", remaining)
-                                        modal_result = inpaint_batch_sync([img_bytes.tobytes()], masks=[mask_bytes.tobytes()])
-                                        if modal_result:
-                                            inpainted_bgr = cv2.imdecode(np.frombuffer(modal_result[0], np.uint8), cv2.IMREAD_COLOR)
-                                    if inpainted_bgr is None:
-                                        inpainted_bgr = self.inpainter.inpaint(filled_img, remaining)
+                                    inpainted_bgr = self._inpaint_page(filled_img, remaining)
                                     inpainted_bgr = self._postprocess_inpaint(cv_img, inpainted_bgr, remaining)
                                     clean_img = Image.fromarray(cv2.cvtColor(inpainted_bgr, cv2.COLOR_BGR2RGB))
                                     del inpainted_bgr
                                 del mask, filled_img
-                                for bubble_bbox, text, is_bubble, text_bbox, angle in bubble_pairs:
+                                for g_idx, bubble_bbox, text, ko, is_bubble, text_bbox, angle in bubble_pairs:
                                     try:
                                         font_type = "dialogue"
                                         if not is_bubble or _is_caption_region(cv_img, text_bbox):
@@ -880,11 +942,18 @@ class TranslationPipeline:
 
         # РЎРѕС…СЂР°РЅСЏРµРј РїРµСЂРµРІРѕРґС‹ РІ РїР°РјСЏС‚СЊ
         if all_final_paths:
-            current_chapter_translations = []
-            for item in translated_queue._queue:
-                if item and not item.get("skip_render") and item.get("translations"):
-                    current_chapter_translations.extend(item["translations"])
-            await asyncio.to_thread(save_translations, mangadex_manga_id, mangadex_manga_id, chapter_number, current_chapter_translations)
+            await asyncio.to_thread(save_translations, mangadex_manga_id, mangadex_manga_id, chapter_number, chapter_translations)
+
+        # LLM-курируемый глоссарий главы (Groq, бесплатно) — стабилизирует имена/термы
+        try:
+            from translator.glossary_builder import build_glossary, merge_glossary
+            if chapter_translations:
+                new_glossary = await build_glossary(chapter_translations, source_lang)
+                added = merge_glossary(new_glossary)
+                if added:
+                    log.info("Glossary updated: +%d entries", added)
+        except Exception as e:
+            log.warning("Chapter glossary build failed: %s", e)
 
         await self._report("Р“РѕС‚РѕРІРѕ!", 100, 100)
         if all_final_paths:
@@ -892,8 +961,81 @@ class TranslationPipeline:
             inc_metric("pages_processed", len(all_final_paths))
         return all_final_paths
 
+    async def render_single_page(
+        self,
+        src_data: bytes,
+        bubbles_meta: list[dict],
+        img_w: int,
+        img_h: int,
+    ) -> bytes:
+        """Перерисовать одну страницу с учётом правок (для веб-редактора).
+
+        Принимает список пузырей с полями: bbox, text_bbox, is_bubble, angle,
+        font_type, text. Использует те же алгоритмы, что и основной пайплайн.
+        """
+        try:
+            img = Image.open(io.BytesIO(src_data)).convert("RGB")
+            cv_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+            h, w = cv_img.shape[:2]
+
+            all_bubble_bboxes = []
+            text_boxes = []
+            active = []
+            for b in bubbles_meta:
+                bb = b.get("bbox")
+                if not bb or not (b.get("text") or "").strip():
+                    continue
+                all_bubble_bboxes.append(tuple(int(v) for v in bb))
+                tb = b.get("text_bbox") or bb
+                text_boxes.append(tuple(int(v) for v in tb))
+                active.append(b)
+
+            if not all_bubble_bboxes:
+                return src_data
+
+            filled_img, self._bg_mask = self._fill_bubble_bg(cv_img, all_bubble_bboxes)
+            mask = build_mask(h, w, all_bubble_bboxes)
+            try:
+                if text_boxes:
+                    smart = build_smart_mask(cv_img, text_boxes)
+                    mask = cv2.bitwise_or(mask, smart)
+            except Exception:
+                pass
+
+            remaining = cv2.bitwise_and(mask, cv2.bitwise_not(self._bg_mask))
+
+            if cv2.countNonZero(remaining) == 0:
+                clean_img = Image.fromarray(cv2.cvtColor(filled_img, cv2.COLOR_BGR2RGB))
+            else:
+                inpainted_bgr = self._inpaint_page(filled_img, remaining)
+                inpainted_bgr = self._postprocess_inpaint(cv_img, inpainted_bgr, remaining)
+                clean_img = Image.fromarray(cv2.cvtColor(inpainted_bgr, cv2.COLOR_BGR2RGB))
+                del inpainted_bgr
+            del mask, filled_img
+
+            for b in active:
+                try:
+                    clean_img = self.renderer.render_bubble_text(
+                        clean_img,
+                        tuple(int(v) for v in b["bbox"]),
+                        b["text"],
+                        font_type=b.get("font_type", "dialogue"),
+                        is_bubble=b.get("is_bubble", True),
+                        original_img=img,
+                        angle=b.get("angle", 0.0),
+                    )
+                except Exception:
+                    continue
+
+            buf = io.BytesIO()
+            clean_img.save(buf, format="PNG")
+            return buf.getvalue()
+        except Exception:
+            record_error()
+            return src_data
+
     async def close(self):
-        await self.mangadex.close()
+        await self.router.close()
         await self.kaggle.close()
         await self.translator.close()
-        await self.inpainter.close()  # Ensure inpainter is closed
+        self.inpainter.close()  # Ensure inpainter is closed

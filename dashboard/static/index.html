@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manga Translator — Dashboard</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 24px; }
+  h1 { font-size: 20px; margin: 0 0 16px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 14px; }
+  .card .label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #94a3b8; }
+  .card .value { font-size: 24px; font-weight: 600; margin-top: 4px; }
+  .card .sub { font-size: 12px; color: #94a3b8; margin-top: 4px; }
+  .ok { color: #4ade80; } .warn { color: #facc15; } .bad { color: #f87171; }
+  section { margin-bottom: 24px; }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .06em; color: #94a3b8; margin: 0 0 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #334155; }
+  th { color: #94a3b8; font-weight: 500; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; }
+  .pill.pending { background: #3b3b6b; color: #a5b4fc; }
+  .pill.processing { background: #3b3b2b; color: #fde047; }
+  .pill.completed { background: #1f4d2f; color: #86efac; }
+  .pill.failed { background: #5b2020; color: #fca5a5; }
+  .pill.active { background: #155e75; color: #67e8f9; }
+  .mono { font-family: Consolas, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+  .error-item { background: #1e293b; border-left: 3px solid #f87171; padding: 8px 12px; margin-bottom: 8px; border-radius: 6px; font-size: 12px; }
+  .error-item .ts { color: #94a3b8; }
+  .bar { height: 8px; background: #334155; border-radius: 4px; overflow: hidden; margin-top: 6px; }
+  .bar > div { height: 100%; background: #4ade80; }
+  .muted { color: #64748b; font-size: 12px; }
+  .spacer { height: 8px; }
+</style>
+</head>
+<body>
+<h1>Manga Translator — Dashboard</h1>
+
+<div class="grid">
+  <div class="card"><div class="label">Статус</div><div class="value" id="status">—</div><div class="sub" id="ts">—</div></div>
+  <div class="card"><div class="label">Uptime</div><div class="value" id="uptime">—</div><div class="sub">с момента старта</div></div>
+  <div class="card"><div class="label">Активные задачи</div><div class="value" id="active">—</div><div class="sub" id="active_sub">—</div></div>
+  <div class="card"><div class="label">В очереди</div><div class="value" id="q_total">—</div><div class="sub">ожидают обработки</div></div>
+</div>
+
+<div class="grid">
+  <div class="card"><div class="label">Глав обработано</div><div class="value" id="m_chapters">—</div></div>
+  <div class="card"><div class="label">Страниц обработано</div><div class="value" id="m_pages">—</div></div>
+  <div class="card"><div class="label">Ошибки</div><div class="value" id="m_errors">—</div></div>
+  <div class="card"><div class="label">LLM успех/фейл</div><div class="value" id="m_llm">—</div></div>
+  <div class="card"><div class="label">OCR успех/фейл</div><div class="value" id="m_ocr">—</div></div>
+  <div class="card"><div class="label">Самокоррекции</div><div class="value" id="m_self">—</div></div>
+</div>
+
+<section>
+  <h2>Статусы очереди</h2>
+  <table>
+    <thead><tr><th>Статус</th><th>Кол-во</th><th>Баланс</th></tr></thead>
+    <tbody id="queue_status"></tbody>
+  </table>
+</section>
+
+<section>
+  <h2>Последние ошибки</h2>
+  <div id="errors">Нет ошибок</div>
+</section>
+
+<div class="muted" id="refresh">обновление…</div>
+
+<script>
+async function refresh() {
+  try {
+    const r = await fetch('/api/overview');
+    const d = await r.json();
+    render(d);
+    document.getElementById('refresh').textContent = 'обновлено ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    document.getElementById('refresh').textContent = 'ошибка загрузки: ' + e;
+  }
+}
+
+function render(d) {
+  const h = d.health || {};
+  const m = h.metrics || {};
+
+  const statusEl = document.getElementById('status');
+  statusEl.textContent = h.status === 'ok' ? 'OK' : (h.status || '—');
+  statusEl.className = 'value ' + (h.status === 'ok' ? 'ok' : 'bad');
+  document.getElementById('ts').textContent = h.ts || '';
+
+  document.getElementById('uptime').textContent = fmtDur(h.uptime_seconds);
+  const a = d.active || {};
+  document.getElementById('active').textContent = a.total != null ? a.total : '—';
+  document.getElementById('active_sub').textContent = a.by_module ? Object.entries(a.by_module).map(([k,v])=>k+':'+v).join(', ') : '';
+
+  const q = d.queue || {};
+  document.getElementById('q_total').textContent = q.pending != null ? q.pending : '—';
+
+  document.getElementById('m_chapters').textContent = m.chapters_processed || 0;
+  document.getElementById('m_pages').textContent = m.pages_processed || 0;
+  const errEl = document.getElementById('m_errors');
+  errEl.textContent = m.errors || 0;
+  errEl.className = 'value ' + ((m.errors||0) > 0 ? 'bad' : '');
+  document.getElementById('m_llm').textContent = (m.llm_success||0) + ' / ' + (m.llm_fail||0);
+  document.getElementById('m_ocr').textContent = (m.ocr_success||0) + ' / ' + (m.ocr_fail||0);
+  document.getElementById('m_self').textContent = (m.self_corrections||0) + ' / ' + (m.validator_fixes||0);
+
+  // Queue status rows
+  const statuses = [['pending','ожидают'],['processing','в работе'],['completed','готово'],['failed','ошибки']];
+  const tb = document.getElementById('queue_status');
+  tb.innerHTML = '';
+  const total = q.total || 1;
+  for (const [key, label] of statuses) {
+    const count = q[key] || 0;
+    const tr = document.createElement('tr');
+    const pct = Math.round(count / total * 100);
+    tr.innerHTML = '<td><span class="pill ' + key + '">' + label + '</span></td>' +
+      '<td>' + count + '</td>' +
+      '<td style="width:40%"><div class="bar"><div style="width:' + pct + '%"></div></div></td>';
+    tb.appendChild(tr);
+  }
+
+  // Recent errors
+  const errorsEl = document.getElementById('errors');
+  const errors = d.recent_errors || [];
+  if (!errors.length) {
+    errorsEl.textContent = 'Нет ошибок';
+  } else {
+    errorsEl.innerHTML = '';
+    for (const e of errors) {
+      const div = document.createElement('div');
+      div.className = 'error-item';
+      div.innerHTML = '<span class="ts">' + (e.ts || '') + '</span> ' + escapeHtml(e.msg || '') +
+        (e.exc ? '<div class="mono">' + escapeHtml(e.exc) + '</div>' : '');
+      errorsEl.appendChild(div);
+    }
+  }
+}
+
+function fmtDur(sec) {
+  if (sec == null) return '—';
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60);
+  if (h) return h + 'ч ' + m + 'м';
+  if (m) return m + 'м ' + s + 'с';
+  return s + 'с';
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

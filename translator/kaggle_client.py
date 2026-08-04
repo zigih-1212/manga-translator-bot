@@ -12,6 +12,7 @@ from PIL import Image
 from functools import wraps
 from .log import log
 from .manga_ocr import get_manga_ocr, is_available as manga_ocr_available
+from cfg import CONFIG
 
 
 class RateLimiter:
@@ -162,26 +163,58 @@ PADDLE_LANG_MAP = {
     "rus": "russian",
 }
 
+# ocr.space поддерживает короткие коды ISO (kor/eng/jpn/rus/...)
+OCR_SPACE_LANG_MAP = {
+    "ko": "kor",
+    "kor": "kor",
+    "en": "eng",
+    "eng": "eng",
+    "ja": "jpn",
+    "jpn": "jpn",
+    "ru": "rus",
+    "rus": "rus",
+    "zh": "chis",
+    "chs": "chis",
+}
+
 
 class KaggleClient:
     def __init__(self, base_url: str = ""):
         proxy = _get_proxy()
         self.client = httpx.AsyncClient(timeout=120.0, proxy=proxy, verify=False) if proxy else httpx.AsyncClient(timeout=120.0)
         self._connected = True
-        self._paddle_available = False # PaddleOCR отключен для экономии RAM
+        self._paddle_available = False  # активируется лениво, если paddle_enabled
+        ocr_cfg = CONFIG.get("ocr", {})
+        self.paddle_enabled = bool(ocr_cfg.get("paddle", False))
+        self.colab_priority = bool(ocr_cfg.get("colab_priority", False))
+        self._paddle_reader = None
 
     async def init(self):
-        # Инициализация PaddleOCR отключена
-        log.info("PaddleOCR отключен, используем ocr.space")
+        if self.paddle_enabled:
+            reader = self._load_paddle()
+            if reader is not None:
+                log.info("PaddleOCR korean готов (primary для ko)")
+            else:
+                log.info("PaddleOCR недоступен — используем ocr.space")
+        else:
+            log.info("PaddleOCR отключен (ocr.paddle=false), используем ocr.space")
 
-    @staticmethod
-    def _init_paddle(lang: str):
-        # Функция инициализации PaddleOCR не используется
-        return None
+    _global_paddle_reader = None
+
+    def _load_paddle(self):
+        if KaggleClient._global_paddle_reader is None:
+            try:
+                from paddleocr import PaddleOCR
+                KaggleClient._global_paddle_reader = PaddleOCR(use_angle_cls=True, lang="korean", show_log=False)
+            except Exception as e:
+                log.warning("PaddleOCR init failed: %s", e)
+                KaggleClient._global_paddle_reader = False
+        return KaggleClient._global_paddle_reader if KaggleClient._global_paddle_reader else None
 
     def _get_paddle(self, lang: str):
-        # Функция получения PaddleOCR не используется
-        return None
+        if not self.paddle_enabled:
+            return None
+        return self._load_paddle()
 
     @property
     def is_connected(self) -> bool:
@@ -211,8 +244,46 @@ class KaggleClient:
             return []
 
     async def ocr_pages(self, pages: list[bytes], lang: str = "kor") -> list[list[dict]]:
-        # Всегда используем ocr.space
-        return await self._ocr_space(pages, lang)
+        # Приоритетная цепочка OCR для корейского:
+        #   1) Colab easyocr GPU (корейск.-спец., 4-точечные боксы, бесплатно) — если развёрнут
+        #   2) PaddleOCR korean (локально, полигоны) — если включён в config
+        #   3) ocr.space (внешний, всегда доступен)
+        #   4) Colab easyocr как fallback, если ocr.space вернул пусто
+        if lang in ("ko", "kor"):
+            if self.colab_priority:
+                try:
+                    from translator.colab_client import ColabClient
+                    colab = ColabClient()
+                    if colab.available:
+                        colab_result = await asyncio.to_thread(colab.ocr_pages, pages)
+                        if colab_result and any(r for r in colab_result):
+                            log.info("Colab GPU OCR primary (%d pages)", len(colab_result))
+                            return colab_result
+                except Exception as e:
+                    log.warning("Colab OCR primary failed: %s", e)
+            if self.paddle_enabled:
+                try:
+                    paddle_result = await self._ocr_paddle(pages, "korean")
+                    if paddle_result and any(r for r in paddle_result):
+                        log.info("PaddleOCR korean primary (%d pages)", len(paddle_result))
+                        return paddle_result
+                except Exception as e:
+                    log.warning("PaddleOCR primary failed: %s", e)
+
+        result = await self._ocr_space(pages, lang)
+        # Colab (easyocr GPU) как fallback, если ocr.space вернул пусто
+        if result and all(not r for r in result):
+            try:
+                from translator.colab_client import ColabClient
+                colab = ColabClient()
+                if colab.available:
+                    colab_result = await asyncio.to_thread(colab.ocr_pages, pages)
+                    if colab_result:
+                        log.info("Colab GPU OCR used as fallback (%d pages)", len(colab_result))
+                        return colab_result
+            except Exception as e:
+                log.warning("Colab OCR fallback failed: %s", e)
+        return result
 
     @staticmethod
     def _preprocess_for_ocr(img_np: np.ndarray) -> np.ndarray:
@@ -245,10 +316,26 @@ class KaggleClient:
                     img_np = cv2.cvtColor(img_np, cv2.COLOR_RGBA2RGB)
                 img_np = self._preprocess_for_ocr(img_np)
                 result = paddle.ocr(img_np, cls=True)
-                if result and len(result) > 0:
-                    all_results.append(result[0])
-                else:
-                    all_results.append([])
+                page_results = []
+                if result and len(result) > 0 and result[0]:
+                    for box, line in result[0]:
+                        if not line or len(line) < 2:
+                            continue
+                        text, conf = line[0], float(line[1])
+                        if conf < 0.3:
+                            continue
+                        poly = [[int(p[0]) / scale, int(p[1]) / scale] for p in box]
+                        xs = [p[0] for p in poly]
+                        ys = [p[1] for p in poly]
+                        page_results.append({
+                            "bbox": [[min(xs), min(ys)], [max(xs), min(ys)], [max(xs), max(ys)], [min(xs), max(ys)]],
+                            "polygon": poly,
+                            "text": text,
+                            "word_bboxes": [[min(xs), min(ys), max(xs), max(ys)]],
+                            "confidence": conf,
+                            "type": "text",
+                        })
+                all_results.append(page_results)
             except Exception:
                 all_results.append([])
         return all_results
@@ -258,6 +345,8 @@ class KaggleClient:
     @retry_async(max_attempts=3, base_delay=1.0, max_delay=10.0)
     async def _ocr_space(self, pages: list[bytes], lang: str) -> list[list[dict]]:
         await ocr_limiter.wait()
+
+        ocr_lang = OCR_SPACE_LANG_MAP.get(lang, lang)
 
         async def _ocr_one(page_data: bytes) -> list[dict]:
             try:
@@ -271,7 +360,7 @@ class KaggleClient:
                 resp = await self.client.post(
                     OCR_SPACE_API,
                     files={"file": (f"page.{ext}", page_data, f"image/{ext}")},
-                    data={"apikey": OCR_SPACE_KEY, "language": lang, "isOverlayRequired": "true"},
+                    data={"apikey": OCR_SPACE_KEY, "language": ocr_lang, "isOverlayRequired": "true"},
                     timeout=60.0,
                 )
                 resp.raise_for_status()

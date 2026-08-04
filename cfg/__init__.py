@@ -39,12 +39,15 @@ def _deep_merge(target: dict, source: dict) -> dict:
 DEFAULT_CONFIG = {
     "webfandom": {"base_url": "https://webfandom.ru", "team_name": ""},
     "mangadex": {"base_url": "https://api.mangadex.org", "image_url": "https://uploads.mangadex.org"},
-    "llm": {"provider": "remote", "model": "google/gemini-2.0-flash-lite", "fallback_provider": "deep-translator", "max_context_tokens": 32000, "temperature": 0.3},
+    "llm": {"provider": "remote", "model": "google/gemini-2.0-flash-lite", "fallback_provider": "deep-translator", "max_context_tokens": 32000, "temperature": 0.3, "vision": "off", "vision_model": ""},
     "fonts": {"dialogue": "fonts/anime/Anime Font.ttf", "sfx": "fonts/bring_me_a_helicopter/Bring Me A Helicopter!.otf", "narration": "fonts/wister_lilya/Wister Lilya.otf"},
     "translation": {"sfx_mode": "english_reference", "auto_publish": False, "max_pages_per_batch": 20, "post_replace": {}},
+    "ocr": {"paddle": False, "colab_priority": False},
+    "inpaint": {"nano_banana": False, "nano_banana_model": "gemini-3.1-flash-image"},
     "titles": [],
     "telegram": {},
     "chapters": {},
+    "webhooks": {"urls": []},
 }
 CONFIG = DEFAULT_CONFIG.copy()
 loaded_config = _load_json(CONFIG_PATH, {})
@@ -59,7 +62,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY") or CONFIG.get("llm", {}).get("groq_api_
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or CONFIG.get("llm", {}).get("gemini_api_key") or ""
 WEBFANDOM_ACCESS_TOKEN = os.getenv("WEBFANDOM_ACCESS_TOKEN", "")
 WEBFANDOM_REFRESH_TOKEN = os.getenv("WEBFANDOM_REFRESH_TOKEN", "")
-REMOTE_SERVER_URL = os.getenv("REMOTE_SERVER_URL") or CONFIG.get("llm", {}).get("remote_server_url") or ""
+REMOTE_SERVER_URL = os.getenv("REMOTE_SERVER_URL") or os.getenv("COLAB_URL") or CONFIG.get("llm", {}).get("remote_server_url") or ""
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY") or CONFIG.get("llm", {}).get("openrouter_api_key") or ""
 TG_PROXY_URL = os.getenv("TG_PROXY_URL") or CONFIG.get("telegram", {}).get("proxy_url") or ""
 
