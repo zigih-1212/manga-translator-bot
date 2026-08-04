@@ -60,22 +60,62 @@ async def select_title(callback: CallbackQuery, state: FSMContext):
 
 @router.message(TranslateStates.choosing_chapter)
 async def process_chapter(message: Message, state: FSMContext):
-    chapter_num = message.text.strip()
+    raw = message.text.strip()
     data = await state.get_data()
     title = data["title"]
 
     manga_id = title["mangadex_id"]
     source_lang = title.get("source_lang", "ko")
 
-    if db.add_to_queue(manga_id, chapter_num, source_lang):
+    numbers = _parse_chapter_numbers(raw)
+    if not numbers:
         await message.answer(
-            f"Глава {chapter_num} для тайтла {title['name']} добавлена в очередь перевода."
+            "Не понимаю номер главы. Введи одно число (например 5), "
+            "диапазон (5-8) или список через запятую (5,7,9)."
         )
-    else:
+        return
+
+    added = []
+    skipped = []
+    for num in numbers:
+        if db.add_to_queue(manga_id, num, source_lang):
+            added.append(num)
+        else:
+            skipped.append(num)
+
+    if added:
         await message.answer(
-            f"Глава {chapter_num} для тайтла {title['name']} уже в очереди или переводится."
+            f"Добавлено в очередь: главы {', '.join(added)} "
+            f"({title['name']}). Переводится автоматически."
+        )
+    if skipped:
+        await message.answer(
+            f"Уже в очереди или в работе: главы {', '.join(skipped)}."
         )
     await state.clear()
+
+
+def _parse_chapter_numbers(raw: str) -> list[str]:
+    """Принимает '5', '5-8', '5,7,9' -> ['5'], ['5','6','7','8'], ['5','7','9']."""
+    raw = raw.replace(" ", ",").replace(";", ",")
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    numbers: list[str] = []
+    for part in parts:
+        if "-" in part and not part.startswith("-"):
+            lo_s, _, hi_s = part.partition("-")
+            try:
+                lo, hi = int(lo_s), int(hi_s)
+            except ValueError:
+                continue
+            if lo <= hi and hi - lo <= 200:
+                numbers.extend(str(i) for i in range(lo, hi + 1))
+        else:
+            try:
+                int(part)
+            except ValueError:
+                continue
+            numbers.append(part)
+    return numbers
 
 
 @router.callback_query(lambda c: c.data == "tr_cancel")

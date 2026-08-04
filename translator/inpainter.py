@@ -43,10 +43,9 @@ def retry_sync(max_attempts=3, base_delay=1.0, max_delay=10.0, jitter=True):
 
 MODEL_DIR = Path(__file__).resolve().parent.parent / "models"
 MODEL_URLS = [
-    "https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.onnx",
-    "https://huggingface.co/botp/big-lama/resolve/main/big-lama.onnx",
-    "https://huggingface.co/ChrisYang0307/big-lama/resolve/main/big-lama.onnx",
-    "https://huggingface.co/datasets/Sanster/LaMa-onnx/resolve/main/big-lama.onnx",
+    "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx",
+    "https://huggingface.co/anyisalin/big-lama-onnx/resolve/main/onnx/model.onnx",
+    "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama.onnx",
 ]
 MODEL_PATH = MODEL_DIR / "lama.onnx"
 
@@ -100,23 +99,22 @@ class LaMaInpainter:
 
     def _inpaint_lama(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
         h, w = image.shape[:2]
-        ph = (8 - h % 8) % 8
-        pw = (8 - w % 8) % 8
-        if ph or pw:
-            img = cv2.copyMakeBorder(image, 0, ph, 0, pw, cv2.BORDER_REFLECT)
-            msk = cv2.copyMakeBorder(mask, 0, ph, 0, pw, cv2.BORDER_CONSTANT, value=0)
+        # ONNX LaMa требует фиксированный ввод 512x512
+        if (h, w) != (512, 512):
+            img_r = cv2.resize(image, (512, 512), interpolation=cv2.INTER_AREA)
+            msk_r = cv2.resize(mask, (512, 512), interpolation=cv2.INTER_NEAREST)
         else:
-            img, msk = image, mask
-        inp = img.astype(np.float32) / 127.5 - 1.0
+            img_r, msk_r = image, mask
+        inp = img_r.astype(np.float32) / 127.5 - 1.0
         inp = inp.transpose(2, 0, 1)[np.newaxis, ...]
-        msk_in = (msk > 127).astype(np.float32)[np.newaxis, np.newaxis, ...]
+        msk_in = (msk_r > 127).astype(np.float32)[np.newaxis, np.newaxis, ...]
         inp_name = self.session.get_inputs()[0].name
         msk_name = self.session.get_inputs()[1].name
         out = self.session.run(None, {inp_name: inp, msk_name: msk_in})[0]
         out = out[0].transpose(1, 2, 0)
         out = ((out + 1.0) * 127.5).clip(0, 255).astype(np.uint8)
-        if ph or pw:
-            out = out[:h, :w]
+        if (h, w) != (512, 512):
+            out = cv2.resize(out, (w, h), interpolation=cv2.INTER_CUBIC)
         return out
 
     def _inpaint_cv(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
