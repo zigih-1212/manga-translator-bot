@@ -28,7 +28,14 @@ async def process_search(message: Message, state: FSMContext):
     query = message.text.strip()
     await message.answer(f"Ищу «{query}» на MangaDex...")
 
-    results = await mangadex.search(query)
+    try:
+        results = await mangadex.search(query)
+    except Exception as e:
+        await message.answer(
+            f"Ошибка поиска на MangaDex: {e}\n"
+            f"Попробуй ещё раз (название) или напиши /cancel"
+        )
+        return
     if not results:
         await message.answer("Ничего не найдено. Попробуй другое название:")
         return

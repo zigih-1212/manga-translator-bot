@@ -24,7 +24,8 @@
   "translation": {
     "sfx_mode": "english_reference",
     "auto_publish": false,
-    "max_pages_per_batch": 20
+    "max_pages_per_batch": 20,
+    "post_replace": {}
   },
   "ocr": {
     "paddle": false,
@@ -34,14 +35,10 @@
     "nano_banana": false,
     "nano_banana_model": "gemini-3.1-flash-image"
   },
-  "titles": [
-    {
-      "name": "MangaDex:3a187b0b",
-      "mangadex_id": "3a187b0b-472b-4f1a-9b04-c833c02ded49",
-      "source_lang": "ko",
-      "chapters_count": 3,
-      "first_chapter": "1",
-      "last_chapter": "3"
-    }
-  ]
+  "titles": [],
+  "telegram": {},
+  "chapters": {},
+  "webhooks": {
+    "urls": []
+  }
 }
