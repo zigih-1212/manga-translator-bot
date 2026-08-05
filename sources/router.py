@@ -40,7 +40,7 @@ class SourceRouter:
         return list(self._registry)
 
     async def search(self, title: str) -> list[MangaResult]:
-        """Search across all sources, return results sorted by chapter count."""
+        """Search across all sources, return all results."""
         results = []
         for name in self._registry:
             try:
@@ -50,15 +50,7 @@ class SourceRouter:
                 results.extend(src_results)
             except Exception as e:
                 log.warning("SourceRouter: поиск в %s упал: %s", name, e)
-        # Deduplicate by title, keep the one with most chapters
-        seen = {}
-        for r in results:
-            key = r.title.lower().strip()
-            if key not in seen or (r.chapters_count or 0) > (seen[key].chapters_count or 0):
-                seen[key] = r
-        # Sort by chapter count descending (most chapters first)
-        sorted_results = sorted(seen.values(), key=lambda x: x.chapters_count or 0, reverse=True)
-        return sorted_results
+        return results
 
     async def find_chapter_by_number(
         self, source: str, manga_id: str, chapter_number: str, lang: str

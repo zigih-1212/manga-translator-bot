@@ -13,6 +13,7 @@ class MangaResult:
     cover_url: str | None
     source: str
     original_language: str = "ko"
+    chapters_count: int = 0
 
 
 @dataclass

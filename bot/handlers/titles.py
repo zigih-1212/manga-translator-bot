@@ -38,13 +38,13 @@ async def cmd_add_title(message: Message, state: FSMContext):
 @router.message(AddTitleStates.waiting_search)
 async def process_search(message: Message, state: FSMContext):
     query = message.text.strip()
-    await message.answer(f"Ищу «{query}» на Mangakakalot...")
+    await message.answer(f"Ищу «{query}»...")
 
     try:
         results = await manga_router.search(query)
     except Exception as e:
         await message.answer(
-            f"Ошибка поиска на Mangakakalot: {e}\n"
+            f"Ошибка поиска: {e}\n"
             f"Попробуй ещё раз (название) или напиши /cancel"
         )
         return
@@ -52,15 +52,29 @@ async def process_search(message: Message, state: FSMContext):
         await message.answer("Ничего не найдено. Попробуй другое название:")
         return
 
-    await state.update_data(search_results=[{"id": r.id, "title": r.title, "source": r.source} for r in results[:5]])
+    # Show results without fetching chapters (faster)
+    # Deduplicate by title, keep first occurrence (MangaDex usually first)
+    seen = set()
+    unique_results = []
+    for r in results:
+        key = r.title.lower().strip()
+        if key not in seen:
+            seen.add(key)
+            unique_results.append(r)
+        if len(unique_results) >= 5:
+            break
+
+    await state.update_data(search_results=[{"id": r.id, "title": r.title, "source": r.source} for r in unique_results])
     buttons = []
-    for i, r in enumerate(results[:5]):
+    for i, r in enumerate(unique_results):
         text = f"{r.title}"
         if r.status:
             text += f" [{r.status}]"
         src_tag = {"mangakakalot": "MK", "manganelo": "MN", "mangadex": "MD"}.get(r.source, r.source.upper())
         buttons.append([InlineKeyboardButton(text=f"[{src_tag}] {text}", callback_data=f"add:{i}")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer("Выбери тайтл:", reply_markup=kb)
+    await state.set_state(AddTitleStates.choosing_result)
     await message.answer("Выбери тайтл:", reply_markup=kb)
     await state.set_state(AddTitleStates.choosing_result)
 
