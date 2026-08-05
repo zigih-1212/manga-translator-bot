@@ -65,7 +65,7 @@ async def process_chapter(message: Message, state: FSMContext):
     data = await state.get_data()
     title = data["title"]
 
-    manga_id = title.get("mangadex_id") or title.get("manga_id")
+    manga_id = title.get("manga_id")
     source_lang = title.get("source_lang", "ko")
     source_name = title.get("source", "mangakakalot")
 
@@ -144,7 +144,7 @@ async def cmd_translate_all(message: Message, state: FSMContext):
 
     added_count = 0
     for title_entry in titles:
-        manga_id = title_entry.get("mangadex_id") or title_entry.get("manga_id")
+        manga_id = title_entry.get("manga_id")
         source_lang = title_entry.get("source_lang", "ko")
         source_name = title_entry.get("source", "mangakakalot")
 
@@ -223,7 +223,7 @@ async def cmd_chapters(message: Message):
 async def check_chapters(callback: CallbackQuery):
     idx = int(callback.data.split(":")[1])
     title = CONFIG["titles"][idx]
-    manga_id = title.get("mangadex_id") or title.get("manga_id")
+    manga_id = title.get("manga_id")
     source_lang = title.get("source_lang", "ko")
     source_name = title.get("source", "mangakakalot")
 
@@ -276,7 +276,7 @@ async def cmd_debug_chapters(message: Message):
 async def debug_chapters(callback: CallbackQuery):
     idx = int(callback.data.split(":")[1])
     title = CONFIG["titles"][idx]
-    manga_id = title.get("mangadex_id") or title.get("manga_id")
+    manga_id = title.get("manga_id")
     source_lang = title.get("source_lang", "ko")
     source_name = title.get("source", "mangakakalot")
 

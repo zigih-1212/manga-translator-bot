@@ -164,7 +164,7 @@ async def process_range(message: Message, state: FSMContext):
     )
 
 
-async def run_translation(chat_id: int, r, chapter_nums: list[str], source_lang: str, source: str = "mangadex"):
+async def run_translation(chat_id: int, r, chapter_nums: list[str], source_lang: str, source: str = "mangakakalot"):
     title = r.title
     manga_id = r.id
     try:

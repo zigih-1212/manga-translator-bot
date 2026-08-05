@@ -58,8 +58,8 @@ async def cb_add_title(callback: CallbackQuery, state: FSMContext):
 async def cb_search_translate(callback: CallbackQuery):
     """Кнопка «Поиск и перевод» — запуск поиска."""
     await callback.message.answer(
-        "🔍 Напиши название манги для поиска на Mangakakalot.\n"
-        "Покажу 3 варианта с обложками — выбери и введи диапазон глав.\n\n"
+        "🔍 Напиши название манги для поиска.\n"
+        "Покажу варианты с обложками — выбери и введи диапазон глав.\n\n"
         "Например: <code>/manga Solo Leveling</code>",
         parse_mode="HTML"
     )
@@ -87,7 +87,7 @@ async def cb_help(callback: CallbackQuery):
     """Кнопка «Помощь» — редактировать сообщение с меню."""
     await callback.message.edit_text(
         "📖 <b>Как пользоваться:</b>\n\n"
-        "1️⃣ <b>Добавить тайтл</b> — поиск на MangaDex по названию\n"
+        "1️⃣ <b>Добавить тайтл</b> — поиск на Mangakakalot по названию\n"
         "2️⃣ <b>Поиск и перевод</b> — быстрый поиск + выбор глав\n"
         "3️⃣ <b>Мои тайтлы</b> — список добавленных, авто-проверка новых глав\n"
         "4️⃣ <b>Статус очереди</b> — что переводится прямо сейчас\n\n"

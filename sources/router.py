@@ -1,10 +1,9 @@
-"""Роутер источников манги: Mangakakalot, MangaNelo + MangaDex fallback."""
+"""Роутер источников манги: Mangakakalot + MangaNelo (английские источники)."""
 import asyncio
 import logging
 from .base import BaseSource, MangaResult, Chapter, Page
 from .mangakakalot import MangakakalotSource
 from .manganelo import MangaNeloSource
-from .mangadex import MangaDexSource
 
 log = logging.getLogger("manga_translator")
 
@@ -18,7 +17,6 @@ class SourceRouter:
     _registry: dict[str, type[BaseSource]] = {
         "mangakakalot": MangakakalotSource,
         "manganelo": MangaNeloSource,
-        "mangadex": MangaDexSource,
     }
 
     def __init__(self):

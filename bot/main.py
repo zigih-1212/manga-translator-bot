@@ -83,7 +83,7 @@ async def check_new_chapters(bot: Bot):
     router = SourceRouter()
 
     for title in titles:
-        manga_id = title.get("mangadex_id") or title.get("manga_id")
+        manga_id = title.get("manga_id")
         source_lang = title.get("source_lang", "ko")
         last_chapter = title.get("last_chapter", "0")
         source_name = title.get("source", "mangakakalot")
@@ -339,7 +339,7 @@ async def startup_translate(bot: Bot):
     try:
         pipeline = TranslationPipeline()
         page_paths = await pipeline.process_chapter(
-            mangadex_manga_id=title.get("mangadex_id") or title.get("manga_id"),
+            mangadex_manga_id=title.get("manga_id"),
             chapter_number=chapter,
             source_lang=title.get("source_lang", "ko"),
             target_lang="en",

@@ -31,7 +31,7 @@ class AddTitleStates(StatesGroup):
 
 @router.message(Command("add_title"))
 async def cmd_add_title(message: Message, state: FSMContext):
-    await message.answer("Название тайтла (поиск на MangaDex):")
+    await message.answer("Название тайтл (поиск на Mangakakalot):")
     await state.set_state(AddTitleStates.waiting_search)
 
 
@@ -53,7 +53,7 @@ async def process_search(message: Message, state: FSMContext):
         return
 
     # Show results without fetching chapters (faster)
-    # Deduplicate by title, keep first occurrence (MangaDex usually first)
+    # Deduplicate by title, keep first occurrence
     seen = set()
     unique_results = []
     for r in results:
@@ -70,7 +70,7 @@ async def process_search(message: Message, state: FSMContext):
         text = f"{r.title}"
         if r.status:
             text += f" [{r.status}]"
-        src_tag = {"mangakakalot": "MK", "manganelo": "MN", "mangadex": "MD"}.get(r.source, r.source.upper())
+        src_tag = {"mangakakalot": "MK", "manganelo": "MN"}.get(r.source, r.source.upper())
         buttons.append([InlineKeyboardButton(text=f"[{src_tag}] {text}", callback_data=f"add:{i}")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer("Выбери тайтл:", reply_markup=kb)
@@ -148,7 +148,6 @@ async def select_source_lang(callback: CallbackQuery, state: FSMContext):
 
     title_entry = {
         "name": title_name,
-        "mangadex_id": manga_id,
         "manga_id": manga_id,
         "source": source_name,
         "source_lang": source_lang,
@@ -157,7 +156,7 @@ async def select_source_lang(callback: CallbackQuery, state: FSMContext):
         "last_chapter": chapters[-1].number if chapters else "",
     }
 
-    existing = [t.get("mangadex_id") or t.get("manga_id") for t in CONFIG.get("titles", [])]
+    existing = [t.get("manga_id") for t in CONFIG.get("titles", [])]
     if manga_id not in existing:
         CONFIG["titles"].append(title_entry)
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
