@@ -140,17 +140,21 @@ async def select_source_lang(callback: CallbackQuery, state: FSMContext):
     await state.clear()
 
 
-@router.message(Command("list"))
-async def cmd_list(message: Message):
+async def _list_titles_impl(message: Message):
+    """Показать список тайтлов (вызывается из команды и из меню)."""
     titles = CONFIG.get("titles", [])
     if not titles:
-        await message.answer("Нет добавленных тайтлов. /add_title")
+        await message.answer("📭 Нет добавленных тайтлов.\nИспользуй ➕ <b>Добавить тайтл</b>", parse_mode="HTML")
         return
 
-    text = "Тайтлы:\n\n"
+    text = "📚 <b>Мои тайтлы:</b>\n\n"
     for i, t in enumerate(titles, 1):
-        text += f"{i}. {t['name']}\n"
-        text += f"   MangaDex: {t.get('mangadex_id', 'нет')}\n"
-        text += f"   Язык: {t.get('source_lang', '?')}\n"
-        text += f"   Глав: {t.get('chapters_count', '?')} ({t.get('first_chapter', '?')}—{t.get('last_chapter', '?')})\n\n"
-    await message.answer(text)
+        text += f"{i}. <b>{t['name']}</b>\n"
+        text += f"   🌐 Язык: {t.get('source_lang', '?')} | 📖 Глав: {t.get('chapters_count', '?')}\n"
+        text += f"   📌 Последняя: гл. {t.get('last_chapter', '?')}\n\n"
+    await message.answer(text, parse_mode="HTML")
+
+
+@router.message(Command("list"))
+async def cmd_list(message: Message):
+    await _list_titles_impl(message)

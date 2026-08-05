@@ -1,6 +1,7 @@
 from aiogram import Router
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.filters import CommandStart, Command
+from aiogram.fsm.context import FSMContext
 from cfg import CONFIG, save_config
 
 router = Router()
@@ -18,7 +19,8 @@ def build_main_menu() -> InlineKeyboardMarkup:
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message):
+async def cmd_start(message: Message, state: FSMContext):
+    await state.clear()
     CONFIG.setdefault("telegram", {})["chat_id"] = message.chat.id
     save_config()
     await message.answer(
@@ -43,54 +45,46 @@ async def cmd_help(message: Message):
 
 
 @router.callback_query(lambda c: c.data == "menu:add_title")
-async def cb_add_title(callback):
-    from bot.handlers.titles import cmd_add_title
-    # Create a fake message to reuse the handler
-    class FakeMsg:
-        def __init__(self, original):
-            self.chat = original.message.chat
-            self.from_user = original.from_user
-            self.text = "/add_title"
-    await cmd_add_title(FakeMsg(callback))
+async def cb_add_title(callback: CallbackQuery, state: FSMContext):
+    """Кнопка «Добавить тайтл» — запускает поиск."""
+    await state.clear()
+    await callback.message.answer("🔍 Название тайтла (поиск на MangaDex):")
+    from bot.handlers.titles import AddTitleStates
+    await state.set_state(AddTitleStates.waiting_search)
     await callback.answer()
 
 
 @router.callback_query(lambda c: c.data == "menu:search_translate")
-async def cb_search_translate(callback):
-    from bot.handlers.manga_translate import cmd_manga
-    class FakeMsg:
-        def __init__(self, original):
-            self.chat = original.message.chat
-            self.from_user = original.from_user
-            self.text = "/manga "
-    await cmd_manga(FakeMsg(callback))
+async def cb_search_translate(callback: CallbackQuery):
+    """Кнопка «Поиск и перевод» — запуск поиска."""
+    await callback.message.answer(
+        "🔍 Напиши название манги для поиска.\n"
+        "Покажу 3 варианта с обложками — выбери и введи диапазон глав.\n\n"
+        "Например: <code>/manga Solo Leveling</code>",
+        parse_mode="HTML"
+    )
     await callback.answer()
 
 
 @router.callback_query(lambda c: c.data == "menu:list_titles")
-async def cb_list_titles(callback):
-    from bot.handlers.titles import cmd_list_titles
-    class FakeMsg:
-        def __init__(self, original):
-            self.chat = original.message.chat
-            self.from_user = original.from_user
-    await cmd_list_titles(FakeMsg(callback))
+async def cb_list_titles(callback: CallbackQuery):
+    """Кнопка «Мои тайтлы» — показать список."""
+    from bot.handlers.titles import _list_titles_impl
+    await _list_titles_impl(callback.message)
     await callback.answer()
 
 
 @router.callback_query(lambda c: c.data == "menu:status")
-async def cb_status(callback):
-    from bot.handlers.status import cmd_status
-    class FakeMsg:
-        def __init__(self, original):
-            self.chat = original.message.chat
-            self.from_user = original.from_user
-    await cmd_status(FakeMsg(callback))
+async def cb_status(callback: CallbackQuery):
+    """Кнопка «Статус очереди» — показать очередь."""
+    from bot.handlers.status import _status_impl
+    await _status_impl(callback.message)
     await callback.answer()
 
 
 @router.callback_query(lambda c: c.data == "menu:help")
-async def cb_help(callback):
+async def cb_help(callback: CallbackQuery):
+    """Кнопка «Помощь» — редактировать сообщение с меню."""
     await callback.message.edit_text(
         "📖 <b>Как пользоваться:</b>\n\n"
         "1️⃣ <b>Добавить тайтл</b> — поиск на MangaDex по названию\n"
