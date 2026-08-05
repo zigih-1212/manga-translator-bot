@@ -52,13 +52,14 @@ async def process_search(message: Message, state: FSMContext):
         await message.answer("Ничего не найдено. Попробуй другое название:")
         return
 
-    await state.update_data(search_results=[{"id": r.id, "title": r.title} for r in results[:5]])
+    await state.update_data(search_results=[{"id": r.id, "title": r.title, "source": r.source} for r in results[:5]])
     buttons = []
     for i, r in enumerate(results[:5]):
         text = f"{r.title}"
         if r.status:
             text += f" [{r.status}]"
-        buttons.append([InlineKeyboardButton(text=text, callback_data=f"add:{i}")])
+        src_tag = {"mangakakalot": "MK", "manganelo": "MN", "mangadex": "MD"}.get(r.source, r.source.upper())
+        buttons.append([InlineKeyboardButton(text=f"[{src_tag}] {text}", callback_data=f"add:{i}")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer("Выбери тайтл:", reply_markup=kb)
     await state.set_state(AddTitleStates.choosing_result)
@@ -76,7 +77,8 @@ async def select_title(callback: CallbackQuery, state: FSMContext):
         return
     manga_id = results[idx]["id"]
     title_name = results[idx]["title"]
-    await state.update_data(manga_name=title_name)
+    source_name = results[idx].get("source", "mangakakalot")
+    await state.update_data(manga_name=title_name, source=source_name)
     await callback.answer()
 
     await callback.message.answer("Проверяю доступные языки...")
@@ -111,6 +113,7 @@ async def select_source_lang(callback: CallbackQuery, state: FSMContext):
 
     data = await state.get_data()
     manga_id = data.get("manga_id")
+    source_name = data.get("source", "mangakakalot")
     if not manga_id:
         await callback.message.answer(
             "Сессия добавления тайтла сброшена (бот перезапускался). "
@@ -120,7 +123,7 @@ async def select_source_lang(callback: CallbackQuery, state: FSMContext):
         return
     title_name = data.get("manga_name", f"Mangakakalot:{manga_id[:8]}")
     await callback.message.answer(f"Ищу главы на языке «{source_lang}»...")
-    source = await manga_router.get("mangakakalot")
+    source = await manga_router.get(source_name)
     chapters = await source.get_chapters(manga_id, source_lang)
     await source.close()
 
@@ -133,7 +136,7 @@ async def select_source_lang(callback: CallbackQuery, state: FSMContext):
         "name": title_name,
         "mangadex_id": manga_id,
         "manga_id": manga_id,
-        "source": "mangakakalot",
+        "source": source_name,
         "source_lang": source_lang,
         "chapters_count": len(chapters),
         "first_chapter": chapters[0].number if chapters else "",
