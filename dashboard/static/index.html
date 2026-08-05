@@ -5,136 +5,408 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Manga Translator — Dashboard</title>
 <style>
-  * { box-sizing: border-box; }
-  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 24px; }
-  h1 { font-size: 20px; margin: 0 0 16px; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+  a { color: #60a5fa; text-decoration: none; }
+  /* Layout */
+  .app { display: flex; min-height: 100vh; }
+  .sidebar { width: 200px; background: #1e293b; border-right: 1px solid #334155; padding: 16px 0; flex-shrink: 0; }
+  .sidebar .logo { padding: 0 16px 16px; font-size: 16px; font-weight: 600; border-bottom: 1px solid #334155; margin-bottom: 8px; }
+  .sidebar .logo span { color: #60a5fa; }
+  .nav-item { display: block; padding: 10px 16px; color: #94a3b8; cursor: pointer; border-left: 3px solid transparent; transition: all .15s; }
+  .nav-item:hover { background: #334155; color: #e2e8f0; }
+  .nav-item.active { background: #1e3a5f; color: #60a5fa; border-left-color: #60a5fa; }
+  .nav-item .icon { display: inline-block; width: 20px; }
+  .content { flex: 1; padding: 24px; overflow-y: auto; }
+  .page { display: none; }
+  .page.active { display: block; }
+  /* Cards */
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; margin-bottom: 20px; }
   .card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 14px; }
   .card .label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #94a3b8; }
   .card .value { font-size: 24px; font-weight: 600; margin-top: 4px; }
   .card .sub { font-size: 12px; color: #94a3b8; margin-top: 4px; }
   .ok { color: #4ade80; } .warn { color: #facc15; } .bad { color: #f87171; }
+  /* Sections */
   section { margin-bottom: 24px; }
   h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .06em; color: #94a3b8; margin: 0 0 10px; }
+  h1 { font-size: 20px; margin: 0 0 16px; }
+  /* Tables */
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #334155; }
   th { color: #94a3b8; font-weight: 500; }
+  tr:hover td { background: #1e293b; }
+  /* Pills */
   .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; }
   .pill.pending { background: #3b3b6b; color: #a5b4fc; }
   .pill.processing { background: #3b3b2b; color: #fde047; }
   .pill.completed { background: #1f4d2f; color: #86efac; }
   .pill.failed { background: #5b2020; color: #fca5a5; }
-  .pill.active { background: #155e75; color: #67e8f9; }
-  .mono { font-family: Consolas, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+  .pill.cancelled { background: #374151; color: #9ca3af; }
+  /* Forms */
+  input, select, textarea { background: #1e293b; border: 1px solid #334155; color: #e2e8f0; padding: 8px 12px; border-radius: 6px; font-size: 13px; width: 100%; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: #60a5fa; }
+  label { display: block; font-size: 12px; color: #94a3b8; margin-bottom: 4px; }
+  .form-group { margin-bottom: 12px; }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  /* Buttons */
+  button { background: #2563eb; color: white; border: none; padding: 8px 16px; border-radius: 6px; font-size: 13px; cursor: pointer; transition: background .15s; }
+  button:hover { background: #1d4ed8; }
+  button.secondary { background: #374151; }
+  button.secondary:hover { background: #4b5563; }
+  button.danger { background: #dc2626; }
+  button.danger:hover { background: #b91c1c; }
+  button.small { padding: 4px 10px; font-size: 11px; }
+  /* Errors */
   .error-item { background: #1e293b; border-left: 3px solid #f87171; padding: 8px 12px; margin-bottom: 8px; border-radius: 6px; font-size: 12px; }
   .error-item .ts { color: #94a3b8; }
+  /* Misc */
+  .mono { font-family: Consolas, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+  .muted { color: #64748b; font-size: 12px; }
   .bar { height: 8px; background: #334155; border-radius: 4px; overflow: hidden; margin-top: 6px; }
   .bar > div { height: 100%; background: #4ade80; }
-  .muted { color: #64748b; font-size: 12px; }
-  .spacer { height: 8px; }
+  .toolbar { display: flex; gap: 8px; margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
+  .spacer { flex: 1; }
+  .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; background: #374151; color: #9ca3af; }
+  .log-line { font-family: Consolas, monospace; font-size: 11px; padding: 4px 8px; border-bottom: 1px solid #1e293b; }
+  .log-line.ERROR { background: #2d1515; }
+  .log-line.WARNING { background: #2d2a15; }
+  .log-line .ts { color: #64748b; margin-right: 8px; }
+  /* Glossary */
+  .glossary-list { max-height: 400px; overflow-y: auto; }
+  .glossary-item { display: flex; justify-content: space-between; padding: 6px 8px; border-bottom: 1px solid #334155; font-size: 13px; }
+  .glossary-item:hover { background: #1e293b; }
+  .glossary-item .term { font-weight: 500; }
+  .glossary-item .arrow { color: #64748b; margin: 0 8px; }
+  .glossary-item .del { color: #f87171; cursor: pointer; opacity: 0; }
+  .glossary-item:hover .del { opacity: 1; }
+  /* Toast */
+  .toast { position: fixed; bottom: 20px; right: 20px; background: #1e293b; border: 1px solid #334155; padding: 12px 16px; border-radius: 8px; font-size: 13px; z-index: 1000; transform: translateY(100px); opacity: 0; transition: all .3s; }
+  .toast.show { transform: translateY(0); opacity: 1; }
+  .toast.ok { border-color: #4ade80; }
+  .toast.err { border-color: #f87171; }
+  /* Responsive */
+  @media (max-width: 768px) {
+    .app { flex-direction: column; }
+    .sidebar { width: 100%; display: flex; overflow-x: auto; padding: 0; }
+    .sidebar .logo { display: none; }
+    .nav-item { white-space: nowrap; border-left: none; border-bottom: 3px solid transparent; }
+    .nav-item.active { border-left-color: transparent; border-bottom-color: #60a5fa; }
+  }
 </style>
 </head>
 <body>
-<h1>Manga Translator — Dashboard</h1>
+<div class="app">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="logo">📖 <span>Manga</span>Bot</div>
+    <div class="nav-item active" data-page="overview"><span class="icon">📊</span> Обзор</div>
+    <div class="nav-item" data-page="queue"><span class="icon">📋</span> Очередь</div>
+    <div class="nav-item" data-page="titles"><span class="icon">📚</span> Тайтлы</div>
+    <div class="nav-item" data-page="glossary"><span class="icon">📝</span> Глоссарий</div>
+    <div class="nav-item" data-page="settings"><span class="icon">⚙️</span> Настройки</div>
+    <div class="nav-item" data-page="logs"><span class="icon">📜</span> Логи</div>
+  </div>
 
-<div class="grid">
-  <div class="card"><div class="label">Статус</div><div class="value" id="status">—</div><div class="sub" id="ts">—</div></div>
-  <div class="card"><div class="label">Uptime</div><div class="value" id="uptime">—</div><div class="sub">с момента старта</div></div>
-  <div class="card"><div class="label">Активные задачи</div><div class="value" id="active">—</div><div class="sub" id="active_sub">—</div></div>
-  <div class="card"><div class="label">В очереди</div><div class="value" id="q_total">—</div><div class="sub">ожидают обработки</div></div>
+  <!-- Content -->
+  <div class="content">
+    <!-- Overview Page -->
+    <div class="page active" id="page-overview">
+      <h1>📊 Обзор</h1>
+      <div class="grid">
+        <div class="card"><div class="label">Статус</div><div class="value" id="v-status">—</div><div class="sub" id="v-ts">—</div></div>
+        <div class="card"><div class="label">Uptime</div><div class="value" id="v-uptime">—</div><div class="sub">с момента старта</div></div>
+        <div class="card"><div class="label">Активные задачи</div><div class="value" id="v-active">—</div><div class="sub" id="v-active-sub">—</div></div>
+        <div class="card"><div class="label">В очереди</div><div class="value" id="v-queue">—</div><div class="sub">ожидают обработки</div></div>
+      </div>
+      <div class="grid">
+        <div class="card"><div class="label">Глав обработано</div><div class="value" id="v-chapters">—</div></div>
+        <div class="card"><div class="label">Страниц обработано</div><div class="value" id="v-pages">—</div></div>
+        <div class="card"><div class="label">Ошибки</div><div class="value" id="v-errors">—</div></div>
+        <div class="card"><div class="label">LLM успех/фейл</div><div class="value" id="v-llm">—</div></div>
+        <div class="card"><div class="label">OCR успех/фейл</div><div class="value" id="v-ocr">—</div></div>
+        <div class="card"><div class="label">Самокоррекции</div><div class="value" id="v-self">—</div></div>
+      </div>
+      <section>
+        <h2>Последние ошибки</h2>
+        <div id="v-errors-list">Нет ошибок</div>
+      </section>
+    </div>
+
+    <!-- Queue Page -->
+    <div class="page" id="page-queue">
+      <h1>📋 Очередь перевода</h1>
+      <div class="toolbar">
+        <button onclick="refreshQueue()">🔄 Обновить</button>
+        <button class="secondary" onclick="clearCompleted()">🧹 Очистить завершённые</button>
+        <button class="danger" onclick="clearFailed()">🗑 Очистить ошибки</button>
+        <div class="spacer"></div>
+        <span class="muted" id="queue-count">—</span>
+      </div>
+      <table>
+        <thead><tr><th>Тайтл</th><th>Глава</th><th>Язык</th><th>Статус</th><th>Добавлено</th><th>Действия</th></tr></thead>
+        <tbody id="queue-body"></tbody>
+      </table>
+    </div>
+
+    <!-- Titles Page -->
+    <div class="page" id="page-titles">
+      <h1>📚 Тайтлы</h1>
+      <div class="toolbar">
+        <button onclick="showAddTitleModal()">➕ Добавить тайтл</button>
+        <button class="secondary" onclick="refreshTitles()">🔄 Обновить</button>
+      </div>
+      <table>
+        <thead><tr><th>Название</th><th>MangaDex ID</th><th>Язык</th><th>Глав</th><th>Последняя</th><th>Действия</th></tr></thead>
+        <tbody id="titles-body"></tbody>
+      </table>
+    </div>
+
+    <!-- Glossary Page -->
+    <div class="page" id="page-glossary">
+      <h1>📝 Глоссарий</h1>
+      <div class="toolbar">
+        <button onclick="showAddGlossaryModal()">➕ Добавить запись</button>
+        <button class="secondary" onclick="importGlossary()">📥 Импорт JSON</button>
+        <button class="secondary" onclick="exportGlossary()">📤 Экспорт</button>
+        <button class="secondary" onclick="refreshGlossary()">🔄 Обновить</button>
+      </div>
+      <div class="form-row" style="margin-bottom:16px">
+        <div class="form-group">
+          <label>Поиск</label>
+          <input type="text" id="glossary-search" placeholder="Фильтр по термину..." oninput="filterGlossary()">
+        </div>
+        <div class="form-group">
+          <label>Категория</label>
+          <select id="glossary-category" onchange="filterGlossary()">
+            <option value="all">Все</option>
+            <option value="characters">Персонажи</option>
+            <option value="terms">Термины</option>
+          </select>
+        </div>
+      </div>
+      <div class="glossary-list" id="glossary-list"></div>
+    </div>
+
+    <!-- Settings Page -->
+    <div class="page" id="page-settings">
+      <h1>⚙️ Настройки</h1>
+      <section>
+        <h2>Telegram</h2>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Chat ID</label>
+            <input type="text" id="set-chat-id" placeholder="7152107861">
+          </div>
+          <div class="form-group">
+            <label>Интервал авто-проверки (часы)</label>
+            <input type="number" id="set-interval" value="6" min="1" max="24">
+          </div>
+        </div>
+      </section>
+      <section>
+        <h2>Перевод</h2>
+        <div class="form-row">
+          <div class="form-group">
+            <label>LLM провайдер</label>
+            <select id="set-llm-provider">
+              <option value="groq">Groq</option>
+              <option value="gemini">Gemini</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="remote">Remote (Codespace)</option>
+              <option value="deep-translator">Deep Translator</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Модель</label>
+            <input type="text" id="set-llm-model" placeholder="google/gemini-2.0-flash-lite">
+          </div>
+        </div>
+      </section>
+      <section>
+        <h2>OCR</h2>
+        <div class="form-row">
+          <div class="form-group">
+            <label><input type="checkbox" id="set-ocr-paddle"> Использовать PaddleOCR</label>
+          </div>
+          <div class="form-group">
+            <label><input type="checkbox" id="set-colab-priority"> Colab приоритет</label>
+          </div>
+        </div>
+      </section>
+      <section>
+        <h2>Inpaint</h2>
+        <div class="form-row">
+          <div class="form-group">
+            <label><input type="checkbox" id="set-inpaint-nano"> Nano Banana (Gemini)</label>
+          </div>
+          <div class="form-group">
+            <label>Модель Nano Banana</label>
+            <input type="text" id="set-inpaint-model" placeholder="gemini-3.1-flash-image">
+          </div>
+        </div>
+      </section>
+      <div class="toolbar">
+        <button onclick="saveSettings()">💾 Сохранить</button>
+        <button class="secondary" onclick="loadSettings()">🔄 Сбросить</button>
+      </div>
+    </div>
+
+    <!-- Logs Page -->
+    <div class="page" id="page-logs">
+      <h1>📜 Логи</h1>
+      <div class="toolbar">
+        <select id="logs-level" onchange="refreshLogs()">
+          <option value="">Все уровни</option>
+          <option value="ERROR">ERROR</option>
+          <option value="WARNING">WARNING</option>
+          <option value="INFO">INFO</option>
+        </select>
+        <input type="number" id="logs-limit" value="100" min="10" max="500" style="width:80px">
+        <button onclick="refreshLogs()">🔄 Обновить</button>
+        <button class="secondary" onclick="toggleAutoScroll()" id="btn-autoscroll">📌 Авто-прокрутка</button>
+        <div class="spacer"></div>
+        <span class="muted" id="logs-status">—</span>
+      </div>
+      <div id="logs-container" style="background:#0a0f1a; border-radius:8px; padding:8px; max-height:70vh; overflow-y:auto;"></div>
+    </div>
+  </div>
 </div>
 
-<div class="grid">
-  <div class="card"><div class="label">Глав обработано</div><div class="value" id="m_chapters">—</div></div>
-  <div class="card"><div class="label">Страниц обработано</div><div class="value" id="m_pages">—</div></div>
-  <div class="card"><div class="label">Ошибки</div><div class="value" id="m_errors">—</div></div>
-  <div class="card"><div class="label">LLM успех/фейл</div><div class="value" id="m_llm">—</div></div>
-  <div class="card"><div class="label">OCR успех/фейл</div><div class="value" id="m_ocr">—</div></div>
-  <div class="card"><div class="label">Самокоррекции</div><div class="value" id="m_self">—</div></div>
+<!-- Add Title Modal -->
+<div id="modal-title" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,.7); z-index:100; align-items:center; justify-content:center;">
+  <div style="background:#1e293b; border-radius:12px; padding:24px; width:400px; max-width:90vw;">
+    <h2 style="margin-bottom:16px">➕ Добавить тайтл</h2>
+    <div class="form-group"><label>Название</label><input type="text" id="new-title-name" placeholder="Solo Leveling"></div>
+    <div class="form-group"><label>MangaDex ID</label><input type="text" id="new-title-mangadex" placeholder="32d76d19-8a05-4db0-9fc2-e0b0648fe9d0"></div>
+    <div class="form-group"><label>Язык оригинала</label>
+      <select id="new-title-lang">
+        <option value="ko">Корейский (ko)</option>
+        <option value="ja">Японский (ja)</option>
+        <option value="zh">Китайский (zh)</option>
+        <option value="en">Английский (en)</option>
+      </select>
+    </div>
+    <div class="toolbar" style="margin-top:16px">
+      <button onclick="addTitle()">Добавить</button>
+      <button class="secondary" onclick="closeModal('modal-title')">Отмена</button>
+    </div>
+  </div>
 </div>
 
-<section>
-  <h2>Статусы очереди</h2>
-  <table>
-    <thead><tr><th>Статус</th><th>Кол-во</th><th>Баланс</th></tr></thead>
-    <tbody id="queue_status"></tbody>
-  </table>
-</section>
+<!-- Add Glossary Modal -->
+<div id="modal-glossary" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,.7); z-index:100; align-items:center; justify-content:center;">
+  <div style="background:#1e293b; border-radius:12px; padding:24px; width:400px; max-width:90vw;">
+    <h2 style="margin-bottom:16px">➕ Добавить запись</h2>
+    <div class="form-group"><label>Термин (оригинал)</label><input type="text" id="new-glossary-term" placeholder="나 혼자만"></div>
+    <div class="form-group"><label>Перевод</label><input type="text" id="new-glossary-translation" placeholder="Я один"></div>
+    <div class="form-group"><label>Категория</label>
+      <select id="new-glossary-category">
+        <option value="terms">Термин</option>
+        <option value="characters">Персонаж</option>
+      </select>
+    </div>
+    <div class="toolbar" style="margin-top:16px">
+      <button onclick="addGlossaryEntry()">Добавить</button>
+      <button class="secondary" onclick="closeModal('modal-glossary')">Отмена</button>
+    </div>
+  </div>
+</div>
 
-<section>
-  <h2>Последние ошибки</h2>
-  <div id="errors">Нет ошибок</div>
-</section>
+<!-- Import Glossary Modal -->
+<div id="modal-import" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,.7); z-index:100; align-items:center; justify-content:center;">
+  <div style="background:#1e293b; border-radius:12px; padding:24px; width:500px; max-width:90vw;">
+    <h2 style="margin-bottom:16px">📥 Импорт глоссария</h2>
+    <div class="form-group"><label>JSON данные</label><textarea id="import-glossary-data" rows="10" style="resize:vertical" placeholder='{"characters": {"나 혼자만": "Я один"}, "terms": {"레이벨업": "Поднятие уровня"}}'></textarea></div>
+    <div class="form-group"><label><input type="checkbox" id="import-glossary-merge" checked> Объединить с существующим</label></div>
+    <div class="toolbar" style="margin-top:16px">
+      <button onclick="doImportGlossary()">Импорт</button>
+      <button class="secondary" onclick="closeModal('modal-import')">Отмена</button>
+    </div>
+  </div>
+</div>
 
-<div class="muted" id="refresh">обновление…</div>
+<!-- Toast -->
+<div class="toast" id="toast"></div>
 
 <script>
-async function refresh() {
-  try {
-    const r = await fetch('/api/overview');
-    const d = await r.json();
-    render(d);
-    document.getElementById('refresh').textContent = 'обновлено ' + new Date().toLocaleTimeString();
-  } catch (e) {
-    document.getElementById('refresh').textContent = 'ошибка загрузки: ' + e;
-  }
+// ── State ──
+let ws = null;
+let autoScroll = true;
+let currentData = { queue: [], titles: [], glossary: { characters: {}, terms: {} } };
+
+// ── Navigation ──
+document.querySelectorAll('.nav-item').forEach(item => {
+  item.onclick = () => {
+    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    item.classList.add('active');
+    document.getElementById('page-' + item.dataset.page).classList.add('active');
+    if (item.dataset.page === 'queue') refreshQueue();
+    if (item.dataset.page === 'titles') refreshTitles();
+    if (item.dataset.page === 'glossary') refreshGlossary();
+    if (item.dataset.page === 'settings') loadSettings();
+    if (item.dataset.page === 'logs') refreshLogs();
+  };
+});
+
+// ── Toast ──
+function toast(msg, type = 'ok') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show ' + type;
+  setTimeout(() => el.className = 'toast', 3000);
 }
 
-function render(d) {
-  const h = d.health || {};
-  const m = h.metrics || {};
+// ── API helpers ──
+async function api(path, opts = {}) {
+  const r = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  return r.json();
+}
 
-  const statusEl = document.getElementById('status');
-  statusEl.textContent = h.status === 'ok' ? 'OK' : (h.status || '—');
-  statusEl.className = 'value ' + (h.status === 'ok' ? 'ok' : 'bad');
-  document.getElementById('ts').textContent = h.ts || '';
+function post(path, data) {
+  return api(path, { method: 'POST', body: JSON.stringify(data) });
+}
 
-  document.getElementById('uptime').textContent = fmtDur(h.uptime_seconds);
-  const a = d.active || {};
-  document.getElementById('active').textContent = a.total != null ? a.total : '—';
-  document.getElementById('active_sub').textContent = a.by_module ? Object.entries(a.by_module).map(([k,v])=>k+':'+v).join(', ') : '';
+// ── Overview ──
+async function refreshOverview() {
+  try {
+    const d = await api('/api/overview');
+    const h = d.health || {};
+    const m = h.metrics || {};
+    const q = d.queue || {};
+    const a = d.active || {};
 
-  const q = d.queue || {};
-  document.getElementById('q_total').textContent = q.pending != null ? q.pending : '—';
+    const statusEl = document.getElementById('v-status');
+    statusEl.textContent = h.status === 'ok' ? 'OK' : (h.status || '—');
+    statusEl.className = 'value ' + (h.status === 'ok' ? 'ok' : 'bad');
+    document.getElementById('v-ts').textContent = h.ts || '';
+    document.getElementById('v-uptime').textContent = fmtDur(h.uptime_seconds);
+    document.getElementById('v-active').textContent = a.total != null ? a.total : '—';
+    document.getElementById('v-active-sub').textContent = a.by_module ? Object.entries(a.by_module).map(([k,v]) => k + ':' + v).join(', ') : '';
+    document.getElementById('v-queue').textContent = q.pending != null ? q.pending : '—';
+    document.getElementById('v-chapters').textContent = m.chapters_processed || 0;
+    document.getElementById('v-pages').textContent = m.pages_processed || 0;
+    const errEl = document.getElementById('v-errors');
+    errEl.textContent = m.errors || 0;
+    errEl.className = 'value ' + ((m.errors || 0) > 0 ? 'bad' : '');
+    document.getElementById('v-llm').textContent = (m.llm_success || 0) + ' / ' + (m.llm_fail || 0);
+    document.getElementById('v-ocr').textContent = (m.ocr_success || 0) + ' / ' + (m.ocr_fail || 0);
+    document.getElementById('v-self').textContent = (m.self_corrections || 0) + ' / ' + (m.validator_fixes || 0);
 
-  document.getElementById('m_chapters').textContent = m.chapters_processed || 0;
-  document.getElementById('m_pages').textContent = m.pages_processed || 0;
-  const errEl = document.getElementById('m_errors');
-  errEl.textContent = m.errors || 0;
-  errEl.className = 'value ' + ((m.errors||0) > 0 ? 'bad' : '');
-  document.getElementById('m_llm').textContent = (m.llm_success||0) + ' / ' + (m.llm_fail||0);
-  document.getElementById('m_ocr').textContent = (m.ocr_success||0) + ' / ' + (m.ocr_fail||0);
-  document.getElementById('m_self').textContent = (m.self_corrections||0) + ' / ' + (m.validator_fixes||0);
-
-  // Queue status rows
-  const statuses = [['pending','ожидают'],['processing','в работе'],['completed','готово'],['failed','ошибки']];
-  const tb = document.getElementById('queue_status');
-  tb.innerHTML = '';
-  const total = q.total || 1;
-  for (const [key, label] of statuses) {
-    const count = q[key] || 0;
-    const tr = document.createElement('tr');
-    const pct = Math.round(count / total * 100);
-    tr.innerHTML = '<td><span class="pill ' + key + '">' + label + '</span></td>' +
-      '<td>' + count + '</td>' +
-      '<td style="width:40%"><div class="bar"><div style="width:' + pct + '%"></div></div></td>';
-    tb.appendChild(tr);
-  }
-
-  // Recent errors
-  const errorsEl = document.getElementById('errors');
-  const errors = d.recent_errors || [];
-  if (!errors.length) {
-    errorsEl.textContent = 'Нет ошибок';
-  } else {
-    errorsEl.innerHTML = '';
-    for (const e of errors) {
-      const div = document.createElement('div');
-      div.className = 'error-item';
-      div.innerHTML = '<span class="ts">' + (e.ts || '') + '</span> ' + escapeHtml(e.msg || '') +
-        (e.exc ? '<div class="mono">' + escapeHtml(e.exc) + '</div>' : '');
-      errorsEl.appendChild(div);
+    // Errors
+    const errorsEl = document.getElementById('v-errors-list');
+    const errors = d.recent_errors || [];
+    if (!errors.length) {
+      errorsEl.textContent = 'Нет ошибок';
+    } else {
+      errorsEl.innerHTML = errors.map(e =>
+        '<div class="error-item"><span class="ts">' + (e.ts || '') + '</span> ' + escapeHtml(e.msg || '') +
+        (e.exc ? '<div class="mono">' + escapeHtml(e.exc) + '</div>' : '') + '</div>'
+      ).join('');
     }
+  } catch (e) {
+    console.error('Overview error:', e);
   }
 }
 
@@ -147,11 +419,289 @@ function fmtDur(sec) {
 }
 
 function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-refresh();
-setInterval(refresh, 5000);
+// ── Queue ──
+async function refreshQueue() {
+  try {
+    const d = await api('/api/queue');
+    const tasks = d.tasks || [];
+    currentData.queue = tasks;
+    document.getElementById('queue-count').textContent = tasks.length + ' задач';
+    const tbody = document.getElementById('queue-body');
+    tbody.innerHTML = tasks.map(t => {
+      const statusPill = '<span class="pill ' + t.status + '">' + statusLabel(t.status) + '</span>';
+      const actions = [];
+      if (t.status === 'failed' || t.status === 'cancelled') {
+        actions.push('<button class="small" onclick="retryTask(\'' + t.manga_id + '\',\'' + t.chapter_number + '\')">🔄</button>');
+      }
+      if (t.status === 'pending' || t.status === 'processing') {
+        actions.push('<button class="small danger" onclick="cancelTask(\'' + t.manga_id + '\',\'' + t.chapter_number + '\')">✕</button>');
+      }
+      return '<tr><td>' + t.manga_id.slice(0, 8) + '...</td><td>' + t.chapter_number + '</td><td>' + t.source_lang + '</td><td>' + statusPill + '</td><td>' + (t.added_at || '—') + '</td><td>' + actions.join(' ') + '</td></tr>';
+    }).join('');
+  } catch (e) {
+    console.error('Queue error:', e);
+  }
+}
+
+function statusLabel(s) {
+  return { pending: 'ожидает', processing: 'в работе', completed: 'готово', failed: 'ошибка', cancelled: 'отмена' }[s] || s;
+}
+
+async function retryTask(mangaId, chapter) {
+  const r = await post('/api/queue/retry', { manga_id: mangaId, chapter });
+  if (r.ok) toast('Задача перезапущена');
+  else toast('Ошибка: ' + (r.error || 'unknown'), 'err');
+  refreshQueue();
+}
+
+async function cancelTask(mangaId, chapter) {
+  const r = await post('/api/queue/cancel', { manga_id: mangaId, chapter });
+  if (r.ok) toast('Задача отменена');
+  else toast('Ошибка: ' + (r.error || 'unknown'), 'err');
+  refreshQueue();
+}
+
+async function clearCompleted() {
+  const r = await post('/api/queue/clear', { status: 'completed' });
+  if (r.ok) toast('Завершённые удалены');
+  refreshQueue();
+}
+
+async function clearFailed() {
+  const r = await post('/api/queue/clear', { status: 'failed' });
+  if (r.ok) toast('Ошибки удалены');
+  refreshQueue();
+}
+
+// ── Titles ──
+async function refreshTitles() {
+  try {
+    const d = await api('/api/titles');
+    const titles = d.titles || [];
+    currentData.titles = titles;
+    const tbody = document.getElementById('titles-body');
+    tbody.innerHTML = titles.map(t => {
+      const actions = '<button class="small danger" onclick="deleteTitle(\'' + t.mangadex_id + '\')">🗑</button>';
+      return '<tr><td>' + escapeHtml(t.name) + '</td><td class="mono">' + t.mangadex_id.slice(0, 8) + '...</td><td>' + t.source_lang + '</td><td>' + (t.chapters_count || 0) + '</td><td>' + (t.last_chapter || 0) + '</td><td>' + actions + '</td></tr>';
+    }).join('');
+  } catch (e) {
+    console.error('Titles error:', e);
+  }
+}
+
+function showAddTitleModal() {
+  document.getElementById('modal-title').style.display = 'flex';
+}
+
+async function addTitle() {
+  const name = document.getElementById('new-title-name').value.trim();
+  const mangadex_id = document.getElementById('new-title-mangadex').value.trim();
+  const source_lang = document.getElementById('new-title-lang').value;
+  if (!name || !mangadex_id) { toast('Заполните все поля', 'err'); return; }
+  const r = await post('/api/titles/add', { name, mangadex_id, source_lang });
+  if (r.ok) {
+    toast('Тайтл добавлен');
+    closeModal('modal-title');
+    refreshTitles();
+  } else {
+    toast('Ошибка: ' + (r.error || 'unknown'), 'err');
+  }
+}
+
+async function deleteTitle(mangadexId) {
+  if (!confirm('Удалить тайтл?')) return;
+  const r = await post('/api/titles/delete', { mangadex_id: mangadexId });
+  if (r.ok) toast('Тайтл удалён');
+  refreshTitles();
+}
+
+// ── Glossary ──
+async function refreshGlossary() {
+  try {
+    const d = await api('/api/glossary');
+    currentData.glossary = d.glossary || { characters: {}, terms: {} };
+    renderGlossary();
+  } catch (e) {
+    console.error('Glossary error:', e);
+  }
+}
+
+function renderGlossary() {
+  const search = document.getElementById('glossary-search').value.toLowerCase();
+  const category = document.getElementById('glossary-category').value;
+  const g = currentData.glossary;
+  let items = [];
+  const cats = category === 'all' ? ['characters', 'terms'] : [category];
+  cats.forEach(cat => {
+    Object.entries(g[cat] || {}).forEach(([term, trans]) => {
+      if (!search || term.toLowerCase().includes(search) || trans.toLowerCase().includes(search)) {
+        items.push({ term, trans, cat });
+      }
+    });
+  });
+  const list = document.getElementById('glossary-list');
+  list.innerHTML = items.map(i =>
+    '<div class="glossary-item"><span><span class="badge">' + (i.cat === 'characters' ? 'перс' : 'терм') + '</span> <span class="term">' + escapeHtml(i.term) + '</span> <span class="arrow">→</span> ' + escapeHtml(i.trans) + '</span><span class="del" onclick="deleteGlossary(\'' + encodeURIComponent(i.term) + '\',\'' + i.cat + '\')">✕</span></div>'
+  ).join('') || '<div class="muted" style="padding:16px">Пусто</div>';
+}
+
+function filterGlossary() { renderGlossary(); }
+
+function showAddGlossaryModal() {
+  document.getElementById('modal-glossary').style.display = 'flex';
+}
+
+async function addGlossaryEntry() {
+  const term = document.getElementById('new-glossary-term').value.trim();
+  const translation = document.getElementById('new-glossary-translation').value.trim();
+  const category = document.getElementById('new-glossary-category').value;
+  if (!term || !translation) { toast('Заполните все поля', 'err'); return; }
+  const r = await post('/api/glossary/add', { term, translation, category });
+  if (r.ok) {
+    toast('Запись добавлена');
+    closeModal('modal-glossary');
+    refreshGlossary();
+  } else {
+    toast('Ошибка: ' + (r.error || 'unknown'), 'err');
+  }
+}
+
+async function deleteGlossary(term, category) {
+  term = decodeURIComponent(term);
+  const r = await post('/api/glossary/delete', { term, category });
+  if (r.ok) toast('Удалено');
+  refreshGlossary();
+}
+
+function importGlossary() {
+  document.getElementById('modal-import').style.display = 'flex';
+}
+
+async function doImportGlossary() {
+  const data = document.getElementById('import-glossary-data').value.trim();
+  const merge = document.getElementById('import-glossary-merge').checked;
+  if (!data) { toast('Введите JSON', 'err'); return; }
+  let parsed;
+  try { parsed = JSON.parse(data); } catch (e) { toast('Невалидный JSON', 'err'); return; }
+  const r = await post('/api/glossary/import', { glossary: parsed, merge });
+  if (r.ok) {
+    toast('Импортировано');
+    closeModal('modal-import');
+    refreshGlossary();
+  } else {
+    toast('Ошибка: ' + (r.error || 'unknown'), 'err');
+  }
+}
+
+function exportGlossary() {
+  const data = JSON.stringify(currentData.glossary, null, 2);
+  const blob = new Blob([data], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'glossary.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Settings ──
+async function loadSettings() {
+  try {
+    const d = await api('/api/settings');
+    document.getElementById('set-chat-id').value = d.telegram?.chat_id || '';
+    document.getElementById('set-interval').value = d.auto_check_interval_hours || 6;
+    document.getElementById('set-llm-provider').value = d.llm?.provider || 'groq';
+    document.getElementById('set-llm-model').value = d.llm?.model || '';
+    document.getElementById('set-ocr-paddle').checked = d.ocr?.paddle || false;
+    document.getElementById('set-colab-priority').checked = d.ocr?.colab_priority || false;
+    document.getElementById('set-inpaint-nano').checked = d.inpaint?.nano_banana || false;
+    document.getElementById('set-inpaint-model').value = d.inpaint?.nano_banana_model || '';
+  } catch (e) {
+    console.error('Settings error:', e);
+  }
+}
+
+async function saveSettings() {
+  const data = {
+    telegram: { chat_id: document.getElementById('set-chat-id').value },
+    auto_check_interval_hours: parseInt(document.getElementById('set-interval').value),
+    llm: {
+      provider: document.getElementById('set-llm-provider').value,
+      model: document.getElementById('set-llm-model').value,
+    },
+    ocr: {
+      paddle: document.getElementById('set-ocr-paddle').checked,
+      colab_priority: document.getElementById('set-colab-priority').checked,
+    },
+    inpaint: {
+      nano_banana: document.getElementById('set-inpaint-nano').checked,
+      nano_banana_model: document.getElementById('set-inpaint-model').value,
+    },
+  };
+  const r = await post('/api/settings/update', data);
+  if (r.ok) toast('Настройки сохранены');
+  else toast('Ошибка: ' + (r.error || 'unknown'), 'err');
+}
+
+// ── Logs ──
+async function refreshLogs() {
+  try {
+    const level = document.getElementById('logs-level').value;
+    const limit = document.getElementById('logs-limit').value;
+    const d = await api('/api/logs?limit=' + limit + (level ? '&level=' + level : ''));
+    const logs = d.logs || [];
+    const container = document.getElementById('logs-container');
+    container.innerHTML = logs.map(l =>
+      '<div class="log-line ' + (l.level || '') + '"><span class="ts">' + (l.ts || '') + '</span>[' + (l.level || '') + '] ' + escapeHtml(l.msg || '') + '</div>'
+    ).join('') || '<div class="muted" style="padding:16px">Нет логов</div>';
+    if (autoScroll) container.scrollTop = container.scrollHeight;
+    document.getElementById('logs-status').textContent = logs.length + ' записей';
+  } catch (e) {
+    console.error('Logs error:', e);
+  }
+}
+
+function toggleAutoScroll() {
+  autoScroll = !autoScroll;
+  document.getElementById('btn-autoscroll').textContent = autoScroll ? '📌 Авто-прокрутка' : '📌 Ручной режим';
+}
+
+// ── WebSocket ──
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(proto + '//' + location.host + '/api/ws');
+  ws.onopen = () => console.log('WS connected');
+  ws.onclose = () => { console.log('WS disconnected, retrying...'); setTimeout(connectWS, 3000); };
+  ws.onerror = () => {};
+  ws.onmessage = (e) => {
+    try {
+      const d = JSON.parse(e.data);
+      if (d.event === 'queue_updated') refreshQueue();
+      if (d.event === 'titles_updated') refreshTitles();
+      if (d.event === 'glossary_updated') refreshGlossary();
+      if (d.event === 'settings_updated') loadSettings();
+    } catch (e) {}
+  };
+}
+
+// ── Modals ──
+function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+document.querySelectorAll('[id^="modal-"]').forEach(m => {
+  m.onclick = (e) => { if (e.target === m) m.style.display = 'none'; };
+});
+
+// ── Init ──
+refreshOverview();
+refreshQueue();
+refreshTitles();
+refreshGlossary();
+loadSettings();
+refreshLogs();
+connectWS();
+setInterval(refreshOverview, 5000);
 </script>
 </body>
 </html>

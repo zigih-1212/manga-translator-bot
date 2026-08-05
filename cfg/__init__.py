@@ -110,3 +110,27 @@ def validate_config():
     if not issues:
         log.info("Config validation OK")
     return len(issues) == 0
+
+
+def load_glossary() -> dict:
+    """Загрузить глоссарий из файла (characters + terms)."""
+    return _load_json(GLOSSARY_PATH, {"characters": {}, "terms": {}})
+
+
+def save_glossary(glossary: dict):
+    """Сохранить глоссарий в файл атомарно."""
+    GLOSSARY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    data = json.dumps(glossary, ensure_ascii=False, indent=2)
+    tmp_path = GLOSSARY_PATH.with_suffix(".json.tmp")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, GLOSSARY_PATH)
+    except Exception:
+        with open(GLOSSARY_PATH, "w", encoding="utf-8") as f:
+            f.write(data)
+    # Update module-level reference
+    global GLOSSARY
+    GLOSSARY = glossary

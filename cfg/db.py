@@ -97,5 +97,21 @@ class TranslationQueueDB:
                            (status, manga_id, chapter_number))
         self.conn.commit()
 
+    def clear_tasks_by_status(self, status: str):
+        """Удалить задачи с указанным статусом."""
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM queue WHERE status = ?", (status,))
+        self.conn.commit()
+
+    def clear_completed_tasks(self):
+        """Удалить все завершённые/отменённые/ошибочные задачи."""
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM queue WHERE status IN ('completed', 'failed', 'cancelled')")
+        self.conn.commit()
+
+    def add_task(self, manga_id: str, chapter_number: str, source_lang: str = "ko") -> bool:
+        """Добавить задачу в очередь (alias для add_to_queue)."""
+        return self.add_to_queue(manga_id, chapter_number, source_lang)
+
     def close(self):
         self.conn.close()
