@@ -20,7 +20,7 @@ from translator.modal_client import inpaint_batch_sync, MODAL_AVAILABLE
 from translator.colab_client import ColabClient
 from translator.sfx_detector import annotate_sfx, is_sfx_text
 from translator.preprocess import preprocess_page, sauvola
-# from translator.upscaler import RealESRGANUpscaler  # РћС‚РєР»СЋС‡РµРЅРѕ РґР»СЏ СЌРєРѕРЅРѕРјРёРё RAM
+# from translator.upscaler import RealESRGANUpscaler  # Отключено для экономии RAM
 from cfg import TEMP_DIR, CONFIG
 
 from cfg.memory import save_translations, _extract_speaker
@@ -222,7 +222,7 @@ class TranslationPipeline:
                 log.info("Nano Banana inpainting enabled (%s)", self.nano_banana.model)
         except Exception as e:
             log.warning("Nano Banana init failed: %s", e)
-        # self._upscaler = RealESRGANUpscaler()  # РћС‚РєР»СЋС‡РµРЅРѕ РґР»СЏ СЌРєРѕРЅРѕРјРёРё RAM
+        # self._upscaler = RealESRGANUpscaler()  # Отключено для экономии RAM
 
     def on_progress(self, callback):
         self.progress_callback = callback
@@ -371,29 +371,29 @@ class TranslationPipeline:
 
         await self.kaggle.init()
 
-        await self._report(f"РџРѕРёСЃРє {source_lang} РіР»Р°РІС‹ {chapter_number}...", 0, 100)
+        await self._report(f"Поиск {source_lang} главы {chapter_number}...", 0, 100)
         src_chapter = await self.router.find_chapter_by_number(
             source, mangadex_manga_id, chapter_number, source_lang
         )
         if not src_chapter:
-            await self._report(f"Р“Р»Р°РІР° {chapter_number} ({source_lang}) РЅРµ РЅР°Р№РґРµРЅР°!", 0, 1)
+            await self._report(f"Глава {chapter_number} ({source_lang}) не найдена!", 0, 1)
             return []
 
-        await self._report(f"РџРѕРёСЃРє {target_lang} РіР»Р°РІС‹ {chapter_number}...", 2, 100)
+        await self._report(f"Поиск {target_lang} главы {chapter_number}...", 2, 100)
         en_chapter = await self.router.find_chapter_by_number(
             source, mangadex_manga_id, chapter_number, target_lang
         )
 
-        await self._report(f"РџРѕР»СѓС‡Р°РµРј СЃРїРёСЃРѕРє СЃС‚СЂР°РЅРёС† {source_lang}...", 5, 100)
+        await self._report(f"Получаем список страниц {source_lang}...", 5, 100)
         src_pages = await self.router.get_pages(source, src_chapter.id, mangadex_manga_id)
         total_pages = len(src_pages)
         if not total_pages:
-            await self._report("РќРµС‚ СЃС‚СЂР°РЅРёС†!", 0, 1)
+            await self._report("Нет страниц!", 0, 1)
             return []
 
         en_page_map = {}
         if en_chapter:
-            await self._report(f"РџРѕР»СѓС‡Р°РµРј СЃРїРёСЃРѕРє СЃС‚СЂР°РЅРёС† {target_lang}...", 7, 100)
+            await self._report(f"Получаем список страниц {target_lang}...", 7, 100)
             en_pages = await self.router.get_pages(source, en_chapter.id, mangadex_manga_id)
             en_page_map = {p.index: p for p in en_pages}
 
@@ -414,7 +414,7 @@ class TranslationPipeline:
             chunk_end = min(chunk_start + CHUNK_SIZE, total_pages)
             chunk_size = chunk_end - chunk_start
             
-            await self._report(f"РћР±СЂР°Р±Р°С‚С‹РІР°РµРј С‡Р°РЅРє {chunk_start//CHUNK_SIZE + 1}/{(total_pages + CHUNK_SIZE - 1)//CHUNK_SIZE} (СЃС‚СЂ. {chunk_start+1}-{chunk_end})", 
+            await self._report(f"Обрабатываем чанк {chunk_start//CHUNK_SIZE + 1}/{(total_pages + CHUNK_SIZE - 1)//CHUNK_SIZE} (стр. {chunk_start+1}-{chunk_end})", 
                              5 + int(90 * chunk_start / total_pages), 100)
 
             # Initialize queues for this chunk
@@ -433,7 +433,7 @@ class TranslationPipeline:
 
             # ---- Stage 1: Downloader (fetches pages) ----
             async def stage_downloader():
-                # РЈРјРµРЅСЊС€Р°РµРј РїР°СЂР°Р»Р»РµР»СЊРЅРѕСЃС‚СЊ РґР»СЏ СЌРєРѕРЅРѕРјРёРё RAM
+                # Уменьшаем параллельность для экономии RAM
                 sem = asyncio.Semaphore(1)  # max 1 concurrent download
                 async def download_one(i: int):
                     async with sem:
@@ -455,7 +455,7 @@ class TranslationPipeline:
                                 "img_h": img_h,
                             }
                         except Exception as e:
-                            await self._report(f"РћС€РёР±РєР° СЃРєР°С‡РёРІР°РЅРёСЏ СЃС‚СЂ. {chunk_start+i+1}: {e}", 
+                            await self._report(f"Ошибка скачивания стр. {chunk_start+i+1}: {e}", 
                                              10 + int(80 * (chunk_start+i) / total_pages), 100)
                             return None
 
@@ -471,7 +471,7 @@ class TranslationPipeline:
 
             # ---- Stage 2: Preprocessor (auto-rotate, upscale, OCR) ----
             async def stage_preprocessor():
-                # РџР°СЂР°Р»Р»РµР»СЊРЅС‹Р№ OCR: РЅРµСЃРєРѕР»СЊРєРѕ СЃС‚СЂР°РЅРёС† РѕРґРЅРѕРІСЂРµРјРµРЅРЅРѕ (Р»РёРјРёС‚РµСЂ Р·Р°С‰РёС‰Р°РµС‚)
+                # Параллельный OCR: несколько страниц одновременно (лимитер защищает)
                 sem = asyncio.Semaphore(3)
                 async def preprocess(item):
                     if item.get("error"):
@@ -488,7 +488,7 @@ class TranslationPipeline:
                             # Auto-rotate
                             src_data = self._auto_rotate(src_data)
 
-                            # Upscale (РѕС‚РєР»СЋС‡РµРЅРѕ РґР»СЏ СЌРєРѕРЅРѕРјРёРё RAM)
+                            # Upscale (отключено для экономии RAM)
                             # if self._upscaler.available:
                             #     try:
                             #         np_img = np.frombuffer(src_data, np.uint8)
@@ -628,7 +628,7 @@ class TranslationPipeline:
                     speakers = item.get("speakers", [])
 
                     try:
-                        await self._report(f"РџРµСЂРµРІРѕРґ СЃС‚СЂ. {chunk_start+idx+1}/{total_pages}", 
+                        await self._report(f"Перевод стр. {chunk_start+idx+1}/{total_pages}", 
                                          10 + int(80 * (chunk_start+idx) / total_pages), 100)
                         translations = await self.translator.translate_page(
                             korean_texts=grouped_ko,
@@ -640,7 +640,7 @@ class TranslationPipeline:
                             page_image=item["src_data"],
                         )
                     except Exception as e:
-                        await self._report(f"РџРµСЂРµРІРѕРґ РѕС€РёР±РєР° СЃС‚СЂ. {chunk_start+idx+1}: {e}", 
+                        await self._report(f"Перевод ошибка стр. {chunk_start+idx+1}: {e}", 
                                          10 + int(80 * (chunk_start+idx) / total_pages), 100)
                         translations = []
 
@@ -675,7 +675,7 @@ class TranslationPipeline:
 
             # ---- Stage 4: Inpainter + Renderer ----
             async def stage_inpainter_renderer():
-                # РЈРјРµРЅСЊС€Р°РµРј РїР°СЂР°Р»Р»РµР»СЊРЅРѕСЃС‚СЊ РґР»СЏ СЌРєРѕРЅРѕРјРёРё RAM
+                # Уменьшаем параллельность для экономии RAM
                 sem = asyncio.Semaphore(1)
                 while True:
                     item = await translated_queue.get()
@@ -891,13 +891,13 @@ class TranslationPipeline:
 
                     out_path = work_dir / f"{(chunk_start+i):03d}.png"
                     out_path.write_bytes(out_data)
-                    await self._report(f"РЎРѕС…СЂР°РЅРµРЅРѕ СЃС‚СЂ. {chunk_start+i+1}/{total_pages}", 
+                    await self._report(f"Сохранено стр. {chunk_start+i+1}/{total_pages}", 
                                      10 + int(80 * (chunk_start+i) / total_pages), 100)
 
                 done_event.set()
 
             # Launch all stages
-            await self._report("Р—Р°РїСѓСЃРє РєРѕРЅРІРµР№РµСЂР°...", 
+            await self._report("Запуск конвейера...", 
                              10 + int(80 * chunk_start / total_pages), 100)
 
             stage_tasks = [
@@ -937,10 +937,10 @@ class TranslationPipeline:
             self.translator.clear_context()
 
             # Report progress
-            await self._report(f"Р§Р°РЅРє {chunk_start//CHUNK_SIZE + 1} Р·Р°РІРµСЂС€РµРЅ. Р’СЃРµРіРѕ РѕР±СЂР°Р±РѕС‚Р°РЅРѕ: {chunk_end}/{total_pages} СЃС‚СЂ.", 
+            await self._report(f"Чанк {chunk_start//CHUNK_SIZE + 1} завершен. Всего обработано: {chunk_end}/{total_pages} стр.", 
                              10 + int(90 * chunk_end / total_pages), 100)
 
-        # РЎРѕС…СЂР°РЅСЏРµРј РїРµСЂРµРІРѕРґС‹ РІ РїР°РјСЏС‚СЊ
+        # Сохраняем переводы РІ память
         if all_final_paths:
             await asyncio.to_thread(save_translations, mangadex_manga_id, mangadex_manga_id, chapter_number, chapter_translations)
 
@@ -955,7 +955,7 @@ class TranslationPipeline:
         except Exception as e:
             log.warning("Chapter glossary build failed: %s", e)
 
-        await self._report("Р“РѕС‚РѕРІРѕ!", 100, 100)
+        await self._report("Готово!", 100, 100)
         if all_final_paths:
             inc_metric("chapters_processed")
             inc_metric("pages_processed", len(all_final_paths))

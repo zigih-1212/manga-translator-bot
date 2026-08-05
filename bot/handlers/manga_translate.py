@@ -207,8 +207,9 @@ async def run_translation(chat_id: int, r, chapter_nums: list[str], source_lang:
                 clear_reporter(chat_id, manga_id, ch_num)
 
                 if not page_paths:
-                    await reporter.finish(f"❌ {title} — гл. {ch_num}: не удалось перевести (глава не найдена).")
-                    await notify_chapter_failed(title, ch_num, "глава не найдена")
+                    # Глава не найдена или нет страниц — это не ошибка, просто информируем
+                    await reporter.finish(f"⚠️ {title} — гл. {ch_num}: глава не найдена или нет страниц.")
+                    await notify_chapter_failed(title, ch_num, "глава не найдена или нет страниц")
                     continue
 
                 zip_path = TEMP_DIR / f"manga_{manga_id[:8]}_ch_{ch_num}.zip"
