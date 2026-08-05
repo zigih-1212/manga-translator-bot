@@ -64,6 +64,7 @@ WEBFANDOM_ACCESS_TOKEN = os.getenv("WEBFANDOM_ACCESS_TOKEN", "")
 WEBFANDOM_REFRESH_TOKEN = os.getenv("WEBFANDOM_REFRESH_TOKEN", "")
 REMOTE_SERVER_URL = os.getenv("REMOTE_SERVER_URL") or os.getenv("COLAB_URL") or CONFIG.get("llm", {}).get("remote_server_url") or ""
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY") or CONFIG.get("llm", {}).get("openrouter_api_key") or ""
+DEEPL_API_KEY = os.getenv("DEEPL_API_KEY") or CONFIG.get("llm", {}).get("deepl_api_key") or ""
 TG_PROXY_URL = os.getenv("TG_PROXY_URL") or CONFIG.get("telegram", {}).get("proxy_url") or ""
 
 TEMP_DIR = BASE_DIR / "temp"

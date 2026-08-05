@@ -9,7 +9,7 @@ import httpx
 import time
 import random
 from functools import wraps
-from cfg import GLOSSARY, CONFIG, REMOTE_SERVER_URL, OPENROUTER_API_KEY, GROQ_API_KEY, GEMINI_API_KEY
+from cfg import GLOSSARY, CONFIG, REMOTE_SERVER_URL, OPENROUTER_API_KEY, GROQ_API_KEY, GEMINI_API_KEY, DEEPL_API_KEY
 
 from cfg.memory import get_context as get_memory_context, get_glossary as get_memory_glossary, get_character_profiles
 from translator.rag import RAGIndex, load_translations_from_memory
@@ -356,6 +356,9 @@ class LLMTranslator:
             self._providers.append(("OpenRouter Free", self._call_openrouter_free))
         if OPENROUTER_API_KEY:
             self._providers.append(("OpenRouter Paid", self._call_openrouter_paid))
+        # DeepL Free - высокое качество, бесплатно (500K символов/мес), нужен прокси из РФ
+        if DEEPL_API_KEY:
+            self._providers.append(("DeepL Free", self._call_deepl))
         # deep-translator (Google Translate) - как последний fallback
         self._providers.append(("deep-translator", self._call_fallback))
 
@@ -667,6 +670,54 @@ class LLMTranslator:
                 return data.get("translations", [])
             except Exception:
                 return None
+
+    @timeout_async(timeout=30.0)
+    @retry_async(max_attempts=2, base_delay=1.0, max_delay=5.0)
+    async def _call_deepl(self, korean_texts, english_texts=None, page_number=0) -> list[dict]:
+        """DeepL Free API — высокое качество перевода, работает через прокси."""
+        async with translation_semaphore:
+            sl = getattr(self, '_source_lang', 'ko')
+            # DeepL language codes
+            deepl_src = {"ko": "KO", "en": "EN", "ja": "JA", "zh": "ZH"}.get(sl, "KO")
+            deepl_tgt = "RU"
+
+            results = []
+            # DeepL API accepts up to 50 texts per request; send in chunks
+            chunk_size = 25
+            for chunk_start in range(0, len(korean_texts), chunk_size):
+                chunk = korean_texts[chunk_start:chunk_start + chunk_size]
+                try:
+                    proxy = _get_proxy()
+                    async with httpx.AsyncClient(
+                        timeout=20.0,
+                        proxy=proxy,
+                        verify=False,
+                    ) as client:
+                        resp = await client.post(
+                            "https://api-free.deepl.com/v2/translate",
+                            headers={"Authorization": f"DeepL-Auth-Key {DEEPL_API_KEY}"},
+                            data={
+                                "text": chunk,
+                                "source_lang": deepl_src,
+                                "target_lang": deepl_tgt,
+                            },
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            translations = data.get("translations", [])
+                            for i, t in enumerate(translations):
+                                results.append({"id": chunk_start + i + 1, "ru": t.get("text", "")})
+                        else:
+                            log.warning("DeepL API error %d: %s", resp.status_code, resp.text[:200])
+                            # Fall back to originals for this chunk
+                            for i, text in enumerate(chunk):
+                                results.append({"id": chunk_start + i + 1, "ru": text})
+                except Exception as e:
+                    log.warning("DeepL request failed: %s", e)
+                    for i, text in enumerate(chunk):
+                        results.append({"id": chunk_start + i + 1, "ru": text})
+
+            return results
 
     @timeout_async(timeout=30.0)
     @retry_async(max_attempts=3, base_delay=1.0, max_delay=10.0)

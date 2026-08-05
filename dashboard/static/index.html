@@ -222,6 +222,17 @@
             <input type="text" id="set-llm-model" placeholder="google/gemini-2.0-flash-lite">
           </div>
         </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>DeepL API Key (Free: 500K символов/мес)</label>
+            <input type="text" id="set-deepl-key" placeholder="xxx-xxx-xxx:fx">
+            <span class="muted">Работает через прокси. Получить: deepl.com/pro-api</span>
+          </div>
+          <div class="form-group">
+            <label>OpenRouter API Key</label>
+            <input type="text" id="set-openrouter-key" placeholder="sk-or-xxx...">
+          </div>
+        </div>
       </section>
       <section>
         <h2>OCR</h2>
@@ -619,6 +630,9 @@ async function loadSettings() {
     document.getElementById('set-colab-priority').checked = d.ocr?.colab_priority || false;
     document.getElementById('set-inpaint-nano').checked = d.inpaint?.nano_banana || false;
     document.getElementById('set-inpaint-model').value = d.inpaint?.nano_banana_model || '';
+    // API keys (masked → empty for editing)
+    document.getElementById('set-deepl-key').value = d.deepl?.api_key || '';
+    document.getElementById('set-openrouter-key').value = d.openrouter?.api_key || '';
   } catch (e) {
     console.error('Settings error:', e);
   }
@@ -640,6 +654,8 @@ async function saveSettings() {
       nano_banana: document.getElementById('set-inpaint-nano').checked,
       nano_banana_model: document.getElementById('set-inpaint-model').value,
     },
+    deepl: { api_key: document.getElementById('set-deepl-key').value },
+    openrouter: { api_key: document.getElementById('set-openrouter-key').value },
   };
   const r = await post('/api/settings/update', data);
   if (r.ok) toast('Настройки сохранены');

@@ -316,22 +316,32 @@ async def titles_update_handler(request: web.Request) -> web.Response:
 
 async def settings_get_handler(request: web.Request) -> web.Response:
     """GET /api/settings — текущие настройки."""
-    # Return safe settings (no secrets)
+    # Return safe settings (mask secrets)
+    llm_cfg = CONFIG.get("llm", {})
     safe = {
         "telegram": CONFIG.get("telegram", {}),
         "titles_count": len(CONFIG.get("titles", [])),
         "auto_check_interval_hours": CONFIG.get("auto_check_interval_hours", 6),
         "inpaint": CONFIG.get("inpaint", {}),
         "llm": {
-            "provider": CONFIG.get("llm", {}).get("provider", "groq"),
-            "model": CONFIG.get("llm", {}).get("model", ""),
+            "provider": llm_cfg.get("provider", "groq"),
+            "model": llm_cfg.get("model", ""),
         },
         "ocr": CONFIG.get("ocr", {}),
         "proxy": bool(CONFIG.get("proxy")),
+        "deepl": {
+            "api_key": "***" if llm_cfg.get("deepl_api_key") else "",
+        },
+        "openrouter": {
+            "api_key": "***" if llm_cfg.get("openrouter_api_key") else "",
+        },
+        "groq": {
+            "api_key": "***" if llm_cfg.get("groq_api_key") else "",
+        },
+        "gemini": {
+            "api_key": "***" if llm_cfg.get("gemini_api_key") else "",
+        },
     }
-    # Mask secrets
-    if "api_key" in safe.get("llm", {}):
-        safe["llm"]["api_key"] = "***"
     return web.json_response(safe)
 
 
@@ -356,6 +366,29 @@ async def settings_update_handler(request: web.Request) -> web.Response:
             CONFIG.setdefault("llm", {})["model"] = llm_update["model"]
     if "telegram" in data and "chat_id" in data["telegram"]:
         CONFIG.setdefault("telegram", {})["chat_id"] = data["telegram"]["chat_id"]
+    # API keys: empty = clear, "***" = unchanged, otherwise update
+    llm_cfg = CONFIG.setdefault("llm", {})
+    for provider in ("deepl", "openrouter", "groq", "gemini"):
+        if provider in data:
+            val = data[provider].get("api_key", "")
+            if val == "":
+                # Clear the key
+                key_map = {
+                    "deepl": "deepl_api_key",
+                    "openrouter": "openrouter_api_key",
+                    "groq": "groq_api_key",
+                    "gemini": "gemini_api_key",
+                }
+                llm_cfg.pop(key_map[provider], None)
+            elif not val.endswith("***"):
+                # Update with new value
+                key_map = {
+                    "deepl": "deepl_api_key",
+                    "openrouter": "openrouter_api_key",
+                    "groq": "groq_api_key",
+                    "gemini": "gemini_api_key",
+                }
+                llm_cfg[key_map[provider]] = val
     save_config()
     await _broadcast_ws({"event": "settings_updated"})
     return web.json_response({"ok": True})
