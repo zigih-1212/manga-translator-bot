@@ -2,56 +2,75 @@
 import asyncio
 import logging
 import re
+import os
 import httpx
 from .base import BaseSource, MangaResult, Chapter, Page
 
 log = logging.getLogger("manga_translator")
 
-BASE_URL = "https://manganelo.com"
-SEARCH_URL = f"{BASE_URL}/search/story"
+# Multiple domains for redundancy
+DOMAINS = [
+    "https://manganato.com",
+    "https://chapmanganato.com",
+    "https://mangakakalot.com",
+    "https://mangakakalot.tv",
+]
 
 
 class MangaNeloSource:
     def __init__(self):
         self._client: httpx.AsyncClient | None = None
 
+    def _get_proxy(self):
+        """Get proxy URL from environment."""
+        return os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or os.environ.get("MANGA_PROXY")
+
     async def _client_get(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(
-                timeout=30.0,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                },
-            )
+            proxy = self._get_proxy()
+            timeout = httpx.Timeout(30.0, connect=10.0)
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+            }
+            if proxy:
+                self._client = httpx.AsyncClient(timeout=timeout, proxy=proxy, verify=False, headers=headers)
+            else:
+                self._client = httpx.AsyncClient(timeout=timeout, headers=headers)
         return self._client
 
     async def search(self, title: str) -> list[MangaResult]:
         """Search manga by title."""
         try:
             client = await self._client_get()
-            r = await client.get(SEARCH_URL, params={"search": title})
-            if r.status_code != 200:
-                return []
-            html = r.text
-            results = []
-            # Parse search results
-            pattern = r'<div class="search-story-item">.*?<a[^>]*href="([^"]+)"[^>]*title="([^"]+)".*?<img[^>]*src="([^"]+)"'
-            for match in re.finditer(pattern, html, re.DOTALL):
-                url, name, img = match.groups()
-                manga_id = url.rstrip("/").split("/")[-1]
-                results.append(MangaResult(
-                    id=manga_id,
-                    title=name,
-                    alt_titles=[],
-                    description="",
-                    status="",
-                    year=None,
-                    cover_url=img,
-                    source="manganelo",
-                    original_language="ko",
-                ))
-            return results
+            for domain in DOMAINS:
+                try:
+                    r = await client.get(f"{domain}/search/story/{title.replace(' ', '_')}")
+                    if r.status_code == 200 and "SpinzyWheel" not in r.text:
+                        html = r.text
+                        results = []
+                        # Parse search results
+                        pattern = r'<div class="search-story-item">.*?<a[^>]*href="([^"]+)"[^>]*title="([^"]+)".*?<img[^>]*src="([^"]+)"'
+                        for match in re.finditer(pattern, html, re.DOTALL):
+                            url, name, img = match.groups()
+                            manga_id = url.rstrip("/").split("/")[-1]
+                            results.append(MangaResult(
+                                id=manga_id,
+                                title=name,
+                                alt_titles=[],
+                                description="",
+                                status="",
+                                year=None,
+                                cover_url=img,
+                                source="manganelo",
+                                original_language="ko",
+                            ))
+                        if results:
+                            return results
+                except Exception:
+                    continue
+            return []
         except Exception as e:
             log.warning("MangaNelo search error: %s", e)
             return []
