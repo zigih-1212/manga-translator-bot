@@ -35,8 +35,27 @@
     "nano_banana": false,
     "nano_banana_model": "gemini-3.1-flash-image"
   },
-  "titles": [],
-  "telegram": {},
+  "titles": [
+    {
+      "name": "MangaDex:3a187b0b",
+      "mangadex_id": "3a187b0b-472b-4f1a-9b04-c833c02ded49",
+      "source_lang": "ko",
+      "chapters_count": 3,
+      "first_chapter": "1",
+      "last_chapter": "3"
+    },
+    {
+      "name": "나 혼자만 레벨업",
+      "mangadex_id": "32d76d19-8a05-4db0-9fc2-e0b0648fe9d0",
+      "source_lang": "en",
+      "chapters_count": 16,
+      "first_chapter": "0",
+      "last_chapter": "15"
+    }
+  ],
+  "telegram": {
+    "chat_id": 7152107861
+  },
   "chapters": {},
   "webhooks": {
     "urls": []

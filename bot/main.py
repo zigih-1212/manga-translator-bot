@@ -14,6 +14,8 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.types import FSInputFile
 from cfg import TG_BOT_TOKEN, TG_PROXY_URL, REMOTE_SERVER_URL, CONFIG, save_config, validate_config
 from bot.handlers import start_router, titles_router, translate_router, status_router, manga_info_router, manga_translate_router
+from bot.middleware import CommandResetState
+from bot.utils.progress import get_reporter, clear_reporter
 from sources.mangadex import MangaDexSource
 from translator.pipeline import TranslationPipeline
 from translator.health import start_health_server, stop_health_server, mark_bot_started, record_error
@@ -105,13 +107,35 @@ async def check_new_chapters(bot: Bot):
 
             for ch in new_chapters:
                 ch_str = ch.number
-                await bot.send_message(
-                    chat_id,
-                    f"🔄 {title['name']} — гл. {ch_str}: перевод...",
-                )
 
                 try:
+                    reporter = get_reporter(chat_id, manga_id, ch_str)
+                    await reporter.start(f"📖 {title['name']} — гл. {ch_str}: инициализация...")
                     pipeline = TranslationPipeline()
+
+                    async def _on_progress(message: str, current: int, total: int):
+                        stage_emoji = "🔄"
+                        manga_name = title['name']
+                        if any(k in message for k in ["Поиск", "find_chapter", "get_pages"]):
+                            stage_emoji = "🌐"
+                        elif any(k in message for k in ["page", "страница", "bubble", "bubble_clean", "Preprocess"]):
+                            stage_emoji = "📄"
+                        elif any(k in message for k in ["Перевод", "translate", "LLM"]):
+                            stage_emoji = "🌐"
+                        elif any(k in message for k in ["Сохранено", "save_translations", "merge_glossary"]):
+                            stage_emoji = "💾"
+                        elif any(k in message for k in ["Готово", "completed", "finish"]):
+                            stage_emoji = "✅"
+                        elif "error" in message.lower() or "ошибка" in message.lower():
+                            stage_emoji = "❌"
+                        elif any(k in message for k in ["inpaint", "mask", "Background"]):
+                            stage_emoji = "🎨"
+                        if total and current:
+                            await reporter.update(f"{stage_emoji} {manga_name} — гл. {ch_str}: {message} [{current}/{total}]")
+                        else:
+                            await reporter.update(f"{stage_emoji} {manga_name} — гл. {ch_str}: {message}")
+
+                    pipeline.on_progress(_on_progress)
                     page_paths = await pipeline.process_chapter(
                         mangadex_manga_id=manga_id,
                         chapter_number=ch_str,
@@ -121,10 +145,12 @@ async def check_new_chapters(bot: Bot):
                     await pipeline.close()
 
                     if not page_paths:
+                        await reporter.finish(f"❌ {title['name']} — гл. {ch_str}: не удалось перевести")
                         await bot.send_message(
                             chat_id,
                             f"❌ {title['name']} — гл. {ch_str}: не удалось перевести",
                         )
+                        clear_reporter(chat_id, manga_id, ch_str)
                         continue
 
                     zip_path = Path("temp") / f"auto_{manga_id[:8]}_{ch_str}.zip"
@@ -152,10 +178,17 @@ async def check_new_chapters(bot: Bot):
                         chat_id,
                         f"✅ {title['name']} — гл. {ch_str}: отправлено",
                     )
+                    await reporter.finish(f"✅ {title['name']} — гл. {ch_str}: отправлено")
+                    clear_reporter(chat_id, manga_id, ch_str)
 
                 except Exception as e:
                     logger.exception(f"auto: ошибка главы {ch_str}: {e}")
                     record_error()
+                    try:
+                        await reporter.finish(f"❌ {title['name']} — гл. {ch_str}: {e}")
+                        clear_reporter(chat_id, manga_id, ch_str)
+                    except Exception:
+                        pass
                     await bot.send_message(
                         chat_id,
                         f"❌ {title['name']} — гл. {ch_str}: {e}",
@@ -209,7 +242,32 @@ async def queue_loop(bot: Bot):
                     try:
                         logger.info(f"Очередь: перевожу {manga_id[:8]} гл. {chapter_number}")
                         db.update_task_status(manga_id, chapter_number, "processing")
+                        reporter = get_reporter(chat_id, manga_id, chapter_number)
+                        await reporter.start(f"📖 Гл. {chapter_number}: инициализация...")
                         pipeline = TranslationPipeline()
+
+                        async def _on_progress(message: str, current: int, total: int):
+                            stage_emoji = "🔄"
+                            if any(k in message for k in ["Поиск", "find_chapter", "get_pages"]):
+                                stage_emoji = "🌐"
+                            elif any(k in message for k in ["page", "страница", "bubble", "bubble_clean", "Preprocess"]):
+                                stage_emoji = "📄"
+                            elif any(k in message for k in ["Перевод", "translate", "LLM"]):
+                                stage_emoji = "🌐"
+                            elif any(k in message for k in ["Сохранено", "save_translations", "merge_glossary"]):
+                                stage_emoji = "💾"
+                            elif any(k in message for k in ["Готово", "completed", "finish"]):
+                                stage_emoji = "✅"
+                            elif "error" in message.lower() or "ошибка" in message.lower():
+                                stage_emoji = "❌"
+                            elif any(k in message for k in ["inpaint", "mask", "Background"]):
+                                stage_emoji = "🎨"
+                            if total and current:
+                                await reporter.update(f"{stage_emoji} Гл. {chapter_number}: {message} [{current}/{total}]")
+                            else:
+                                await reporter.update(f"{stage_emoji} Гл. {chapter_number}: {message}")
+
+                        pipeline.on_progress(_on_progress)
                         page_paths = await pipeline.process_chapter(
                             mangadex_manga_id=manga_id,
                             chapter_number=chapter_number,
@@ -220,6 +278,8 @@ async def queue_loop(bot: Bot):
                         if page_paths:
                             db.update_task_status(manga_id, chapter_number, "completed")
                             logger.info(f"Очередь: гл. {chapter_number} переведена")
+                            await reporter.finish(f"✅ Гл. {chapter_number}: переведена")
+                            clear_reporter(chat_id, manga_id, chapter_number)
                             if chat_id and bot:
                                 try:
                                     zip_path = Path("temp") / f"q_{manga_id[:8]}_ch_{chapter_number}.zip"
@@ -248,6 +308,11 @@ async def queue_loop(bot: Bot):
                         logger.exception(f"Очередь: ошибка гл. {chapter_number}: {e}")
                         record_error()
                         db.update_task_status(manga_id, chapter_number, "failed", str(e))
+                        try:
+                            await reporter.finish(f"❌ Гл. {chapter_number}: ошибка: {e}")
+                            clear_reporter(chat_id, manga_id, chapter_number)
+                        except Exception:
+                            pass
                     await asyncio.sleep(10)  # delay between chapters
             db.close()
         except Exception as e:
@@ -307,6 +372,7 @@ async def main():
     from bot.utils.telegram_helpers import set_bot
     set_bot(bot)
     dp = Dispatcher()
+    dp.message.middleware(CommandResetState())
 
     dp.include_router(start_router)
     dp.include_router(titles_router)

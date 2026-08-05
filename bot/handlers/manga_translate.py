@@ -13,6 +13,7 @@ from translator.health import record_error
 from translator.webhooks import notify_chapter_done, notify_chapter_failed
 from cfg import CONFIG, save_config
 from bot.utils.telegram_helpers import send_text, send_document
+from bot.utils.progress import get_reporter, clear_reporter
 
 router = Router()
 sources = SourceRouter()
@@ -164,12 +165,37 @@ async def process_range(message: Message, state: FSMContext):
 
 
 async def run_translation(chat_id: int, r, chapter_nums: list[str], source_lang: str, source: str = "mangadex"):
+    title = r.title
     manga_id = r.id
     try:
         for i, ch_num in enumerate(chapter_nums, 1):
             try:
-                await send_text(chat_id, f"📄 [{i}/{len(chapter_nums)}] Глава {ch_num}: перевод...")
+                reporter = get_reporter(chat_id, manga_id, ch_num)
+                await reporter.start(f"📖 [{i}/{len(chapter_nums)}] {title} — гл. {ch_num}: инициализация...")
                 pipeline = TranslationPipeline(source=source)
+
+                async def _on_progress(message: str, current: int, total: int):
+                    stage_emoji = "🔄"
+                    if any(k in message for k in ["Поиск", "find_chapter", "get_pages"]):
+                        stage_emoji = "🌐"
+                    elif any(k in message for k in ["page", "страница", "bubble", "bubble_clean", "Preprocess"]):
+                        stage_emoji = "📄"
+                    elif any(k in message for k in ["Перевод", "translate", "LLM"]):
+                        stage_emoji = "🌐"
+                    elif any(k in message for k in ["Сохранено", "save_translations", "merge_glossary"]):
+                        stage_emoji = "💾"
+                    elif any(k in message for k in ["Готово", "completed", "finish"]):
+                        stage_emoji = "✅"
+                    elif "error" in message.lower() or "ошибка" in message.lower():
+                        stage_emoji = "❌"
+                    elif any(k in message for k in ["inpaint", "mask", "Background"]):
+                        stage_emoji = "🎨"
+                    if total and current:
+                        await reporter.update(f"{stage_emoji} {title} — гл. {ch_num}: {message} [{current}/{total}]")
+                    else:
+                        await reporter.update(f"{stage_emoji} {title} — гл. {ch_num}: {message}")
+
+                pipeline.on_progress(_on_progress)
                 page_paths = await pipeline.process_chapter(
                     mangadex_manga_id=manga_id,
                     chapter_number=ch_num,
@@ -178,10 +204,11 @@ async def run_translation(chat_id: int, r, chapter_nums: list[str], source_lang:
                     source=source,
                 )
                 await pipeline.close()
+                clear_reporter(chat_id, manga_id, ch_num)
 
                 if not page_paths:
-                    await send_text(chat_id, f"❌ Глава {ch_num}: не удалось перевести (глава не найдена).")
-                    await notify_chapter_failed(r.title, ch_num, "глава не найдена")
+                    await reporter.finish(f"❌ {title} — гл. {ch_num}: не удалось перевести (глава не найдена).")
+                    await notify_chapter_failed(title, ch_num, "глава не найдена")
                     continue
 
                 zip_path = TEMP_DIR / f"manga_{manga_id[:8]}_ch_{ch_num}.zip"
@@ -192,15 +219,19 @@ async def run_translation(chat_id: int, r, chapter_nums: list[str], source_lang:
 
                 await send_document(
                     chat_id, zip_path,
-                    caption=f"{r.title} — глава {ch_num}",
+                    caption=f"{title} — глава {ch_num}",
                 )
                 zip_path.unlink(missing_ok=True)
-                await send_text(chat_id, f"✅ Глава {ch_num} готова!")
-                await notify_chapter_done(r.title, ch_num)
+                await reporter.finish(f"✅ {title} — гл. {ch_num} готова!")
+                await notify_chapter_done(title, ch_num)
             except Exception as e:
                 record_error()
-                await send_text(chat_id, f"❌ Глава {ch_num}: ошибка: {e}")
-                await notify_chapter_failed(r.title, ch_num, str(e))
+                try:
+                    await reporter.finish(f"❌ {title} — гл. {ch_num}: ошибка: {e}")
+                    clear_reporter(chat_id, manga_id, ch_num)
+                except Exception:
+                    pass
+                await notify_chapter_failed(title, ch_num, str(e))
 
             if i < len(chapter_nums):
                 await asyncio.sleep(10)  # delay between chapters
