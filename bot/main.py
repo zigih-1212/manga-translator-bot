@@ -9,7 +9,6 @@ import httpx
 import zipfile
 from aiohttp import ClientSession
 from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.types import FSInputFile
 from cfg import TG_BOT_TOKEN, TG_PROXY_URL, REMOTE_SERVER_URL, CONFIG, save_config, validate_config
@@ -374,13 +373,15 @@ async def startup_translate(bot: Bot):
 
 async def main():
     global bot
-    bot = Bot(token=TG_BOT_TOKEN, session=build_session(), default=DefaultBotProperties(parse_mode=None))
+    bot = Bot(token=TG_BOT_TOKEN, session=build_session())
     from bot.utils.telegram_helpers import set_bot
     set_bot(bot)
     dp = Dispatcher()
     dp.message.middleware(CommandResetState())
 
-    for router in get_routers():
+    routers = get_routers()
+    logger.info("Loaded %d routers", len(routers))
+    for router in routers:
         dp.include_router(router)
 
     logger.info("Bot starting...")

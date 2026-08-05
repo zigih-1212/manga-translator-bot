@@ -2,6 +2,9 @@ from aiogram import BaseMiddleware
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 from typing import Callable, Awaitable, Any
+import logging
+
+log = logging.getLogger("middleware")
 
 
 class CommandResetState(BaseMiddleware):
@@ -11,10 +14,13 @@ class CommandResetState(BaseMiddleware):
         event: Message,
         data: dict[str, Any],
     ) -> Any:
-        if event.text and event.text.startswith("/"):
-            state: FSMContext | None = data.get("state")
-            if state is not None:
-                current_state = await state.get_state()
-                if current_state is not None:
-                    await state.clear()
+        try:
+            if event.text and event.text.startswith("/"):
+                state: FSMContext | None = data.get("state")
+                if state is not None:
+                    current_state = await state.get_state()
+                    if current_state is not None:
+                        await state.clear()
+        except Exception as e:
+            log.warning("CommandResetState error: %s", e)
         return await handler(event, data)
