@@ -373,6 +373,11 @@ async def startup_translate(bot: Bot):
 
 async def main():
     global bot
+    if not TG_BOT_TOKEN or ":" not in TG_BOT_TOKEN:
+        logger.error("TG_BOT_TOKEN is not set or invalid! Check .env file.")
+        logger.error("Current DATA_DIR: %s", os.getenv("DATA_DIR"))
+        logger.error("Current dir: %s", os.getcwd())
+        return
     bot = Bot(token=TG_BOT_TOKEN, session=build_session())
     from bot.utils.telegram_helpers import set_bot
     set_bot(bot)
