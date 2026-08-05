@@ -38,6 +38,7 @@ class MangakakalotSource:
             client = await self._client_get()
             # Try Mangakakalot API directly
             r = await client.get(f"{MK_API}/search", params={"query": title})
+            log.info("Mangakakalot search: HTTP %d for '%s'", r.status_code, title)
             if r.status_code == 200:
                 data = r.json()
                 results = []
@@ -54,9 +55,11 @@ class MangakakalotSource:
                         original_language="ko",
                     ))
                 if results:
+                    log.info("Mangakakalot found %d results", len(results))
                     return results
             # Fallback to MangaHook
             r = await client.get(f"{API_BASE}/search", params={"query": title})
+            log.info("MangaHook search: HTTP %d", r.status_code)
             if r.status_code == 200:
                 data = r.json()
                 results = []
@@ -72,7 +75,9 @@ class MangakakalotSource:
                         source="mangakakalot",
                         original_language="ko",
                     ))
-                return results
+                if results:
+                    log.info("Mangakakalot found %d results", len(results))
+                    return results
             log.warning("Mangakakalot search failed: HTTP %d", r.status_code)
             return []
         except Exception as e:
@@ -85,6 +90,7 @@ class MangakakalotSource:
             client = await self._client_get()
             # Try Mangakakalot API
             r = await client.get(f"{MK_API}/manga/{manga_id}/chapters")
+            log.info("Mangakakalot get_chapters: HTTP %d for '%s'", r.status_code, manga_id)
             if r.status_code == 200:
                 data = r.json()
                 chapters = []
@@ -98,9 +104,11 @@ class MangakakalotSource:
                         translated_language=lang,
                     ))
                 if chapters:
+                    log.info("Mangakakalot found %d chapters", len(chapters))
                     return chapters
             # Fallback to MangaHook
             r = await client.get(f"{API_BASE}/manga/{manga_id}/chapters")
+            log.info("MangaHook get_chapters: HTTP %d", r.status_code)
             if r.status_code == 200:
                 data = r.json()
                 chapters = []
@@ -115,6 +123,9 @@ class MangakakalotSource:
                     ))
                 return chapters
             log.warning("Mangakakalot get_chapters failed: HTTP %d", r.status_code)
+            return []
+        except Exception as e:
+            log.warning("Mangakakalot get_chapters error: %s", e)
             return []
         except Exception as e:
             log.warning("Mangakakalot get_chapters error: %s", e)
