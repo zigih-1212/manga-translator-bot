@@ -135,7 +135,7 @@ proxy_breaker = CircuitBreaker(max_failures=3, reset_timeout=30)
 log = logging.getLogger("manga_translator")
 
 def _get_proxy():
-    p = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or os.environ.get("TG_PROXY_URL") or os.environ.get("http_proxy") or os.environ.get("https_proxy")
+    p = os.environ.get("MANGA_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or os.environ.get("TG_PROXY_URL") or os.environ.get("http_proxy") or os.environ.get("https_proxy")
     if not p:
         try:
             from cfg import TG_PROXY_URL
