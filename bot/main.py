@@ -13,9 +13,9 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.types import FSInputFile
 from cfg import TG_BOT_TOKEN, TG_PROXY_URL, REMOTE_SERVER_URL, CONFIG, save_config, validate_config
-from bot.handlers import start_router, titles_router, translate_router, status_router, manga_info_router, manga_translate_router
 from bot.middleware import CommandResetState
 from bot.utils.progress import get_reporter, clear_reporter
+from bot.handlers import get_routers
 from sources.mangadex import MangaDexSource
 from translator.pipeline import TranslationPipeline
 from translator.health import start_health_server, stop_health_server, mark_bot_started, record_error
@@ -374,12 +374,8 @@ async def main():
     dp = Dispatcher()
     dp.message.middleware(CommandResetState())
 
-    dp.include_router(start_router)
-    dp.include_router(titles_router)
-    dp.include_router(translate_router)
-    dp.include_router(status_router)
-    dp.include_router(manga_info_router)
-    dp.include_router(manga_translate_router)
+    for router in get_routers():
+        dp.include_router(router)
 
     logger.info("Bot starting...")
     validate_config()
