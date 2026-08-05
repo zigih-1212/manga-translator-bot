@@ -24,7 +24,7 @@ async def cmd_start(message: Message, state: FSMContext):
     CONFIG.setdefault("telegram", {})["chat_id"] = message.chat.id
     save_config()
     await message.answer(
-        "👋 Привет! Я бот для перевода манги с MangaDex.\n"
+        "👋 Привет! Я бот для перевода манги с Mangakakalot.\n"
         "Выбери действие ниже:",
         reply_markup=build_main_menu()
     )
@@ -34,7 +34,7 @@ async def cmd_start(message: Message, state: FSMContext):
 async def cmd_help(message: Message):
     await message.answer(
         "📖 <b>Как пользоваться:</b>\n\n"
-        "1️⃣ <b>Добавить тайтл</b> — поиск на MangaDex по названию\n"
+        "1️⃣ <b>Добавить тайтл</b> — поиск на Mangakakalot по названию\n"
         "2️⃣ <b>Поиск и перевод</b> — быстрый поиск + выбор глав\n"
         "3️⃣ <b>Мои тайтлы</b> — список добавленных, авто-проверка новых глав\n"
         "4️⃣ <b>Статус очереди</b> — что переводится прямо сейчас\n\n"
@@ -48,7 +48,7 @@ async def cmd_help(message: Message):
 async def cb_add_title(callback: CallbackQuery, state: FSMContext):
     """Кнопка «Добавить тайтл» — запускает поиск."""
     await state.clear()
-    await callback.message.answer("🔍 Название тайтла (поиск на MangaDex):")
+    await callback.message.answer("🔍 Название тайтла (поиск на Mangakakalot):")
     from bot.handlers.titles import AddTitleStates
     await state.set_state(AddTitleStates.waiting_search)
     await callback.answer()
@@ -58,7 +58,7 @@ async def cb_add_title(callback: CallbackQuery, state: FSMContext):
 async def cb_search_translate(callback: CallbackQuery):
     """Кнопка «Поиск и перевод» — запуск поиска."""
     await callback.message.answer(
-        "🔍 Напиши название манги для поиска.\n"
+        "🔍 Напиши название манги для поиска на Mangakakalot.\n"
         "Покажу 3 варианта с обложками — выбери и введи диапазон глав.\n\n"
         "Например: <code>/manga Solo Leveling</code>",
         parse_mode="HTML"

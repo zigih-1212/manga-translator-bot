@@ -55,7 +55,7 @@ async def cmd_manga(message: Message, state: FSMContext):
         label = r.title
         if not label or label == "Unknown":
             label = r.alt_titles[0] if r.alt_titles else "Unknown"
-        src_tag = {"mangadex": "MD", "naver": "NAVER"}.get(r.source, r.source.upper())
+        src_tag = {"mangakakalot": "MK", "manganelo": "MN"}.get(r.source, r.source.upper())
         buttons.append([InlineKeyboardButton(
             text=f"✅ [{src_tag}] {label[:60]}",
             callback_data=f"mtr:{i}",
@@ -147,7 +147,7 @@ async def process_range(message: Message, state: FSMContext):
             return
 
     chat_id = message.chat.id
-    source = data.get("source", "mangadex")
+    source = data.get("source", "mangakakalot")
     await state.clear()
 
     if chat_id in active_tasks and not active_tasks[chat_id].done():

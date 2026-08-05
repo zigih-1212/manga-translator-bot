@@ -16,7 +16,7 @@ from cfg import TG_BOT_TOKEN, TG_PROXY_URL, REMOTE_SERVER_URL, CONFIG, save_conf
 from bot.middleware import CommandResetState
 from bot.utils.progress import get_reporter, clear_reporter
 from bot.handlers import get_routers
-from sources.mangadex import MangaDexSource
+from sources.router import SourceRouter
 from translator.pipeline import TranslationPipeline
 from translator.health import start_health_server, stop_health_server, mark_bot_started, record_error
 from cfg.db import TranslationQueueDB
@@ -81,13 +81,16 @@ async def check_new_chapters(bot: Bot):
         logger.warning("auto: нет chat_id — отправь /start")
         return
 
+    router = SourceRouter()
+
     for title in titles:
-        manga_id = title.get("mangadex_id")
+        manga_id = title.get("mangadex_id") or title.get("manga_id")
         source_lang = title.get("source_lang", "ko")
         last_chapter = title.get("last_chapter", "0")
+        source_name = title.get("source", "mangakakalot")
 
         try:
-            source = MangaDexSource()
+            source = await router.get(source_name)
             chapters = await source.get_chapters(manga_id, source_lang)
 
             new_chapters = []
@@ -141,6 +144,7 @@ async def check_new_chapters(bot: Bot):
                         chapter_number=ch_str,
                         source_lang=source_lang,
                         target_lang="en",
+                        source=source_name,
                     )
                     await pipeline.close()
 
@@ -273,6 +277,7 @@ async def queue_loop(bot: Bot):
                             chapter_number=chapter_number,
                             source_lang=source_lang,
                             target_lang="en",
+                            source="mangakakalot",
                         )
                         await pipeline.close()
                         if page_paths:
@@ -335,10 +340,11 @@ async def startup_translate(bot: Bot):
     try:
         pipeline = TranslationPipeline()
         page_paths = await pipeline.process_chapter(
-            mangadex_manga_id=title["mangadex_id"],
+            mangadex_manga_id=title.get("mangadex_id") or title.get("manga_id"),
             chapter_number=chapter,
             source_lang=title.get("source_lang", "ko"),
             target_lang="en",
+            source=title.get("source", "mangakakalot"),
         )
         await pipeline.close()
         if not page_paths:

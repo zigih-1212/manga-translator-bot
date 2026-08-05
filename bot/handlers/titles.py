@@ -4,11 +4,23 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, C
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from sources.mangadex import MangaDexSource
+from sources.router import SourceRouter as MangaSourceRouter
 from cfg import CONFIG, CONFIG_PATH
 
 router = Router()
-mangadex = MangaDexSource()
+manga_router = MangaSourceRouter()
+
+
+class AddTitleStates(StatesGroup):
+    waiting_search = State()
+    choosing_result = State()
+    choosing_lang = State()
+
+
+@router.message(Command("add_title"))
+async def cmd_add_title(message: Message, state: FSMContext):
+    await message.answer("Название тайтла (поиск на Mangakakalot):")
+    await state.set_state(AddTitleStates.waiting_search)
 
 
 class AddTitleStates(StatesGroup):
@@ -26,13 +38,13 @@ async def cmd_add_title(message: Message, state: FSMContext):
 @router.message(AddTitleStates.waiting_search)
 async def process_search(message: Message, state: FSMContext):
     query = message.text.strip()
-    await message.answer(f"Ищу «{query}» на MangaDex...")
+    await message.answer(f"Ищу «{query}» на Mangakakalot...")
 
     try:
-        results = await mangadex.search(query)
+        results = await manga_router.search(query)
     except Exception as e:
         await message.answer(
-            f"Ошибка поиска на MangaDex: {e}\n"
+            f"Ошибка поиска на Mangakakalot: {e}\n"
             f"Попробуй ещё раз (название) или напиши /cancel"
         )
         return
@@ -68,8 +80,9 @@ async def select_title(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
     await callback.message.answer("Проверяю доступные языки...")
-    langs = await mangadex.get_available_languages(manga_id)
-    lang_list = ", ".join(langs) if langs else "неизвестно"
+    # Mangakakalot has English chapters, default to Korean original
+    langs = ["ko", "en"]
+    lang_list = "Korean (оригинал), English"
 
     await state.update_data(manga_id=manga_id, available_langs=langs)
 
@@ -105,9 +118,11 @@ async def select_source_lang(callback: CallbackQuery, state: FSMContext):
         )
         await state.clear()
         return
-    title_name = data.get("manga_name", f"MangaDex:{manga_id[:8]}")
+    title_name = data.get("manga_name", f"Mangakakalot:{manga_id[:8]}")
     await callback.message.answer(f"Ищу главы на языке «{source_lang}»...")
-    chapters = await mangadex.get_chapters(manga_id, source_lang)
+    source = await manga_router.get("mangakakalot")
+    chapters = await source.get_chapters(manga_id, source_lang)
+    await source.close()
 
     if not chapters:
         await callback.message.answer(f"Нет глав на языке «{source_lang}».")
@@ -117,13 +132,15 @@ async def select_source_lang(callback: CallbackQuery, state: FSMContext):
     title_entry = {
         "name": title_name,
         "mangadex_id": manga_id,
+        "manga_id": manga_id,
+        "source": "mangakakalot",
         "source_lang": source_lang,
         "chapters_count": len(chapters),
         "first_chapter": chapters[0].number if chapters else "",
         "last_chapter": chapters[-1].number if chapters else "",
     }
 
-    existing = [t["mangadex_id"] for t in CONFIG.get("titles", [])]
+    existing = [t.get("mangadex_id") or t.get("manga_id") for t in CONFIG.get("titles", [])]
     if manga_id not in existing:
         CONFIG["titles"].append(title_entry)
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
@@ -131,7 +148,7 @@ async def select_source_lang(callback: CallbackQuery, state: FSMContext):
 
     await callback.message.answer(
         f"Тайтл добавлен!\n\n"
-        f"MangaDex ID: {manga_id}\n"
+        f"Mangakakalot ID: {manga_id}\n"
         f"Язык оригинала: {source_lang}\n"
         f"Глав: {len(chapters)}\n"
         f"Диапазон: {chapters[0].number} — {chapters[-1].number}\n\n"

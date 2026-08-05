@@ -12,9 +12,10 @@ import zipfile
 from cfg import CONFIG, save_config
 from translator.pipeline import TranslationPipeline
 from cfg.db import TranslationQueueDB
-from sources.mangadex import MangaDexSource
+from sources.router import SourceRouter as MangaSourceRouter
 
 router = Router()
+manga_router = MangaSourceRouter()
 active_tasks: dict[int, asyncio.Task] = {}
 
 db = TranslationQueueDB()
@@ -64,8 +65,9 @@ async def process_chapter(message: Message, state: FSMContext):
     data = await state.get_data()
     title = data["title"]
 
-    manga_id = title["mangadex_id"]
+    manga_id = title.get("mangadex_id") or title.get("manga_id")
     source_lang = title.get("source_lang", "ko")
+    source_name = title.get("source", "mangakakalot")
 
     numbers = _parse_chapter_numbers(raw)
     if not numbers:
@@ -142,12 +144,13 @@ async def cmd_translate_all(message: Message, state: FSMContext):
 
     added_count = 0
     for title_entry in titles:
-        manga_id = title_entry["mangadex_id"]
+        manga_id = title_entry.get("mangadex_id") or title_entry.get("manga_id")
         source_lang = title_entry.get("source_lang", "ko")
+        source_name = title_entry.get("source", "mangakakalot")
 
-        mangadex_source = MangaDexSource()
-        chapters = await mangadex_source.get_chapters(manga_id, source_lang)
-        await mangadex_source.close()
+        source = await manga_router.get(source_name)
+        chapters = await source.get_chapters(manga_id, source_lang)
+        await source.close()
 
         for chapter in chapters:
             if db.add_to_queue(manga_id, chapter.number, source_lang):
@@ -220,16 +223,17 @@ async def cmd_chapters(message: Message):
 async def check_chapters(callback: CallbackQuery):
     idx = int(callback.data.split(":")[1])
     title = CONFIG["titles"][idx]
-    manga_id = title["mangadex_id"]
+    manga_id = title.get("mangadex_id") or title.get("manga_id")
     source_lang = title.get("source_lang", "ko")
+    source_name = title.get("source", "mangakakalot")
 
-    await callback.answer("Проверяю на MangaDex...")
+    await callback.answer("Проверяю на Mangakakalot...")
     await callback.message.answer(f"🔍 Проверяю главы «{title['name']}» (язык: {source_lang})...")
 
     try:
-        mangadex_source = MangaDexSource()
-        chapters = await mangadex_source.get_chapters(manga_id, source_lang)
-        await mangadex_source.close()
+        source = await manga_router.get(source_name)
+        chapters = await source.get_chapters(manga_id, source_lang)
+        await source.close()
 
         if not chapters:
             await callback.message.answer(f"Главы не найдены для «{title['name']}» на языке {source_lang}.")
@@ -238,7 +242,7 @@ async def check_chapters(callback: CallbackQuery):
         numbers = sorted(set(float(c.number) for c in chapters if c.number))
         await callback.message.answer(
             f"📚 <b>{title['name']}</b>\n"
-            f"🔗 MangaDex ID: <code>{manga_id}</code>\n"
+            f"🔗 Mangakakalot ID: <code>{manga_id}</code>\n"
             f"🌐 Язык: {source_lang}\n"
             f"📖 Найдено глав: <b>{len(chapters)}</b> (уникальных номеров: <b>{len(numbers)}</b>)\n"
             f"📐 Диапазон: <code>{numbers[0]:.0f}</code> — <code>{numbers[-1]:.0f}</code>\n"
@@ -272,58 +276,31 @@ async def cmd_debug_chapters(message: Message):
 async def debug_chapters(callback: CallbackQuery):
     idx = int(callback.data.split(":")[1])
     title = CONFIG["titles"][idx]
-    manga_id = title["mangadex_id"]
+    manga_id = title.get("mangadex_id") or title.get("manga_id")
     source_lang = title.get("source_lang", "ko")
+    source_name = title.get("source", "mangakakalot")
 
     await callback.answer("Загружаю сырой ответ API...")
     await callback.message.answer(f"🔍 Debug: запрашиваю главы {manga_id} ({source_lang})...")
 
     try:
-        mangadex_source = MangaDexSource()
-        # Прямой запрос к API без прокси
-        import aiohttp
-        async with aiohttp.ClientSession() as session:
-            url = f"https://api.mangadex.org/manga/{manga_id}/feed"
-            params = {
-                "translatedLanguage[]": source_lang,
-                "limit": 500,
-                "offset": 0,
-                "order[chapter]": "asc",
-                "includes[]": "scanlation_group",
-            }
-            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                if resp.status != 200:
-                    await callback.message.answer(f"HTTP {resp.status}: {await resp.text()}")
-                    return
-                data = await resp.json()
-        
-        items = data.get("data", [])
-        await callback.message.answer(
-            f"📊 Raw API response:\n"
-            f"Total items in response: {len(items)}\n"
-            f"Limit: 500, Offset: 0\n"
-            f"Status: {data.get('result', 'unknown')}\n\n"
-            f"First 3 items:\n" +
-            "\n".join([f"  Ch {item['attributes'].get('chapter', '?')} (id: {item['id'][:8]})" for item in items[:3]])
-        )
+        source = await manga_router.get(source_name)
+        chapters = await source.get_chapters(manga_id, source_lang)
+        await source.close()
 
-        # Парсим как в get_chapters
-        chapters = []
-        seen = set()
-        for item in items:
-            attrs = item["attributes"]
-            ch_num = attrs.get("chapter", "")
-            try:
-                ch_float = float(attrs.get("chapter", ""))
-                if ch_float not in seen:
-                    seen.add(ch_float)
-            except:
-                pass
-        
-        await callback.message.answer(f"Unique chapters parsed: {len(seen)}")
-        
+        if not chapters:
+            await callback.message.answer(f"Главы не найдены для «{title['name']}» на языке {source_lang}.")
+            return
+
+        numbers = sorted(set(float(c.number) for c in chapters if c.number))
+        await callback.message.answer(
+            f"📚 <b>{title['name']}</b>\n"
+            f"🔗 ID: <code>{manga_id}</code>\n"
+            f"📖 Глав: {len(chapters)}\n"
+            f"📅 Диапазон: {numbers[0] if numbers else '?'} — {numbers[-1] if numbers else '?'}"
+        )
     except Exception as e:
-        await callback.message.answer(f"Debug error: {e}")
+        await callback.message.answer(f"Ошибка: {e}")
 
 
 @router.shutdown()

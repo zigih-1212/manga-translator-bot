@@ -1,9 +1,9 @@
-"""Роутер источников манги: единый интерфейс для MangaDex, Naver и др."""
+"""Роутер источников манги: единый интерфейс для Mangakakalot, MangaNelo и др."""
 import asyncio
 import logging
 from .base import BaseSource, MangaResult, Chapter, Page
-from .mangadex import MangaDexSource
-from .naver import NaverSource
+from .mangakakalot import MangakakalotSource
+from .manganelo import MangaNeloSource
 
 log = logging.getLogger("manga_translator")
 
@@ -15,8 +15,8 @@ class SourceRouter:
     """
 
     _registry: dict[str, type[BaseSource]] = {
-        "mangadex": MangaDexSource,
-        "naver": NaverSource,
+        "mangakakalot": MangakakalotSource,
+        "manganelo": MangaNeloSource,
     }
 
     def __init__(self):
@@ -24,10 +24,10 @@ class SourceRouter:
         self._lock = asyncio.Lock()
 
     async def get(self, name: str) -> BaseSource:
-        key = (name or "mangadex").lower()
+        key = (name or "mangakakalot").lower()
         if key not in self._registry:
-            log.warning("SourceRouter: неизвестный источник '%s', использую mangadex", name)
-            key = "mangadex"
+            log.warning("SourceRouter: неизвестный источник '%s', использую mangakakalot", name)
+            key = "mangakakalot"
         if key not in self._sources:
             async with self._lock:
                 if key not in self._sources:
@@ -63,13 +63,7 @@ class SourceRouter:
 
     async def get_pages(self, source: str, chapter_id: str, manga_id: str = "") -> list[Page]:
         src = await self.get(source)
-        if hasattr(src, "get_pages") and self._needs_title_id(source, src):
-            return await src.get_pages(chapter_id, title_id=manga_id)
         return await src.get_pages(chapter_id)
-
-    @staticmethod
-    def _needs_title_id(source: str, src: BaseSource) -> bool:
-        return isinstance(src, NaverSource)
 
     async def download_page(self, source: str, page: Page) -> bytes:
         return await (await self.get(source)).download_page(page)

@@ -5,10 +5,10 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from pathlib import Path
-from sources.mangadex import MangaDexSource
+from sources.router import SourceRouter as MangaSourceRouter
 
 router = Router()
-mangadex = MangaDexSource()
+manga_router = MangaSourceRouter()
 TEMP_DIR = Path(__file__).resolve().parent.parent.parent / "temp"
 
 
@@ -24,7 +24,7 @@ async def cmd_manga(message: Message, state: FSMContext):
         return
     await message.answer(f"Ищу «{query}»...")
     try:
-        results = await mangadex.search(query)
+        results = await manga_router.search(query)
     except Exception as e:
         await message.answer(f"Ошибка поиска: {e}. Попробуй позже.")
         return
@@ -69,7 +69,7 @@ async def select_manga_info(callback: CallbackQuery, state: FSMContext):
     text += f"\n📊 Статус: {r.status or 'неизвестно'}"
     if r.year:
         text += f" | Год: {r.year}"
-    text += f"\n🔗 mangadex.org/title/{r.id}"
+    text += f"\n🔗 mangakakalot.com/manga/{r.id}"
     if r.cover_url:
         try:
             async with aiohttp.ClientSession() as session:
