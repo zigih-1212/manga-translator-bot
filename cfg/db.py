@@ -109,6 +109,17 @@ class TranslationQueueDB:
         cursor.execute("DELETE FROM queue WHERE status IN ('completed', 'failed', 'cancelled')")
         self.conn.commit()
 
+    def purge_older_than(self, days: int = 30) -> int:
+        """Удалить завершённые записи старше N дней (анти-раздувание БД)."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "DELETE FROM queue WHERE status IN ('completed','failed','cancelled') "
+            "AND completed_at IS NOT NULL AND completed_at < datetime('now', ?)",
+            (f"-{int(days)} days",),
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
     def add_task(self, manga_id: str, chapter_number: str, source_lang: str = "ko") -> bool:
         """Добавить задачу в очередь (alias для add_to_queue)."""
         return self.add_to_queue(manga_id, chapter_number, source_lang)

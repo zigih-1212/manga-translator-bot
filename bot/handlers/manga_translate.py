@@ -1,6 +1,6 @@
 import asyncio
+import time
 import aiohttp
-import zipfile
 from pathlib import Path
 from aiogram import Router, F
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, FSInputFile
@@ -14,6 +14,7 @@ from translator.webhooks import notify_chapter_done, notify_chapter_failed
 from cfg import CONFIG, save_config
 from bot.utils.telegram_helpers import send_text, send_document
 from bot.utils.progress import get_reporter, clear_reporter
+from bot.utils.packaging import pack_chapter_cbz
 
 router = Router()
 sources = SourceRouter()
@@ -159,16 +160,22 @@ async def process_range(message: Message, state: FSMContext):
     await message.answer(
         f"🚀 Начинаю перевод <b>{r.title}</b>:\n"
         f"Главы: {chapter_nums[0]}–{chapter_nums[-1]} ({len(chapter_nums)} шт.)\n"
-        f"ZIP будет отправлен после каждой главы.",
+        f"📦 CBZ будет отправлен после каждой главы. /cancel — остановить.",
         parse_mode="HTML",
     )
 
 
 async def run_translation(chat_id: int, r, chapter_nums: list[str], source_lang: str, source: str = "mangakakalot"):
+    from bot.handlers.controls import RUNNING_TASKS, record_chapter_done, record_chapter_failed
     title = r.title
     manga_id = r.id
+    task_key = f"{manga_id[:8]}:{','.join(chapter_nums)}"
     try:
         for i, ch_num in enumerate(chapter_nums, 1):
+            # Cooperative cancellation between chapters (/cancel)
+            cur = asyncio.current_task()
+            if cur is not None:
+                RUNNING_TASKS[f"{manga_id[:8]} гл.{ch_num}"] = cur
             try:
                 reporter = get_reporter(chat_id, manga_id, ch_num)
                 await reporter.start(f"📖 [{i}/{len(chapter_nums)}] {title} — гл. {ch_num}: инициализация...")
@@ -196,6 +203,7 @@ async def run_translation(chat_id: int, r, chapter_nums: list[str], source_lang:
                         await reporter.update(f"{stage_emoji} {title} — гл. {ch_num}: {message}")
 
                 pipeline.on_progress(_on_progress)
+                _t0 = time.monotonic()
                 page_paths = await pipeline.process_chapter(
                     mangadex_manga_id=manga_id,
                     chapter_number=ch_num,
@@ -212,19 +220,20 @@ async def run_translation(chat_id: int, r, chapter_nums: list[str], source_lang:
                     await notify_chapter_failed(title, ch_num, "глава не найдена или нет страниц")
                     continue
 
-                zip_path = TEMP_DIR / f"manga_{manga_id[:8]}_ch_{ch_num}.zip"
-                zip_path.parent.mkdir(parents=True, exist_ok=True)
-                with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                    for p in page_paths:
-                        zf.write(p, arcname=Path(p).name)
+                cbz_path = TEMP_DIR / f"{title[:20]}_ch_{ch_num}.cbz".replace(" ", "_")
+                pack_chapter_cbz(page_paths, cbz_path, series=title, chapter=ch_num)
 
                 await send_document(
-                    chat_id, zip_path,
+                    chat_id, cbz_path,
                     caption=f"{title} — глава {ch_num}",
                 )
-                zip_path.unlink(missing_ok=True)
+                cbz_path.unlink(missing_ok=True)
+                record_chapter_done(f"{title} гл.{ch_num}", time.monotonic() - _t0, len(page_paths))
                 await reporter.finish(f"✅ {title} — гл. {ch_num} готова!")
                 await notify_chapter_done(title, ch_num)
+            except asyncio.CancelledError:
+                await send_text(chat_id, f"🛑 Перевод «{title}» остановлен (/cancel).")
+                raise
             except Exception as e:
                 record_error()
                 try:

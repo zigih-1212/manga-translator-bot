@@ -370,8 +370,16 @@ function toast(msg, type = 'ok') {
 }
 
 // ── API helpers ──
+// Token: taken from ?token= URL param (persisted) for dashboard auth.
+const urlTok = new URLSearchParams(location.search).get('token');
+if (urlTok) { localStorage.setItem('dashToken', urlTok); history.replaceState(null, '', location.pathname); }
+function authHeaders() {
+  const t = localStorage.getItem('dashToken');
+  return t ? { 'Authorization': 'Bearer ' + t } : {};
+}
 async function api(path, opts = {}) {
-  const r = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  const r = await fetch(path, { headers: { 'Content-Type': 'application/json', ...authHeaders() }, ...opts });
+  if (r.status === 401) { document.body.innerHTML = '<h2 style="color:#f87171;padding:24px">🔒 Unauthorized. Откройте с ?token=ВАШ_ТОКЕН</h2>'; throw new Error('unauthorized'); }
   return r.json();
 }
 
@@ -688,7 +696,9 @@ function toggleAutoScroll() {
 // ── WebSocket ──
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(proto + '//' + location.host + '/api/ws');
+  const t = localStorage.getItem('dashToken');
+  const q = t ? ('?token=' + encodeURIComponent(t)) : '';
+  ws = new WebSocket(proto + '//' + location.host + '/api/ws' + q);
   ws.onopen = () => console.log('WS connected');
   ws.onclose = () => { console.log('WS disconnected, retrying...'); setTimeout(connectWS, 3000); };
   ws.onerror = () => {};

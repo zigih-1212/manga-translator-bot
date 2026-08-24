@@ -1,179 +1,174 @@
-"""Mangakakalot source via MangaHook API — Solo Leveling 200 chapters."""
+"""Mangakakalot source — direct HTML scraping (no dead third-party APIs)."""
 import asyncio
 import logging
 import os
+import re
 import httpx
 from .base import BaseSource, MangaResult, Chapter, Page
 
 log = logging.getLogger("manga_translator")
 
-API_BASE = "https://mangahook-api.vercel.app/api"
-# Fallback: direct Mangakakalot API
-MK_API = "https://api.mangakakalot.tv"
+DOMAINS = [
+    "https://mangakakalot.com",
+    "https://mangakakalottt.com",
+    "https://www.mangakakalot.gg",
+]
+
+_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+
+_BLOCK_MARKERS = ("SpinzyWheel", "Just a moment", "challenge-platform")
 
 
-class MangakakalotSource:
+class MangakakalotSource(BaseSource):
     def __init__(self):
         self._client: httpx.AsyncClient | None = None
+        self._working_domain: str | None = None
 
-    def _get_proxy(self):
-        """Get proxy URL from environment."""
-        return os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or os.environ.get("MANGA_PROXY")
+    @staticmethod
+    def _get_proxy():
+        return (os.environ.get("MANGA_PROXY")
+                or os.environ.get("HTTP_PROXY")
+                or os.environ.get("HTTPS_PROXY"))
 
-    async def _client_get(self) -> httpx.AsyncClient:
+    async def _client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
+            kwargs = dict(
+                timeout=httpx.Timeout(30.0, connect=10.0),
+                headers=_HEADERS,
+                follow_redirects=True,
+            )
             proxy = self._get_proxy()
-            timeout = httpx.Timeout(30.0, connect=10.0)
             if proxy:
-                self._client = httpx.AsyncClient(timeout=timeout, proxy=proxy, verify=False,
-                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
-            else:
-                self._client = httpx.AsyncClient(timeout=timeout,
-                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
+                kwargs["proxy"] = proxy
+                kwargs["verify"] = False
+            self._client = httpx.AsyncClient(**kwargs)
         return self._client
 
-    async def search(self, title: str) -> list[MangaResult]:
-        """Search manga by title using Mangakakalot API."""
+    async def _fetch(self, url: str) -> str | None:
+        client = await self._client()
         try:
-            client = await self._client_get()
-            # Try Mangakakalot API directly
-            r = await client.get(f"{MK_API}/search", params={"query": title})
-            log.info("Mangakakalot search: HTTP %d for '%s'", r.status_code, title)
-            if r.status_code == 200:
-                data = r.json()
-                results = []
-                for item in data.get("results", data.get("manga_list", [])):
-                    results.append(MangaResult(
-                        id=item.get("id", item.get("slug", "")),
-                        title=item.get("title", item.get("name", "")),
-                        alt_titles=item.get("alt_names", item.get("alt_titles", [])),
-                        description=item.get("description", ""),
-                        status=item.get("status", ""),
-                        year=item.get("year"),
-                        cover_url=item.get("image", item.get("cover_url", item.get("thumb"))),
-                        source="mangakakalot",
-                        original_language="ko",
-                    ))
-                if results:
-                    log.info("Mangakakalot found %d results", len(results))
-                    return results
-            # Fallback to MangaHook
-            r = await client.get(f"{API_BASE}/search", params={"query": title})
-            log.info("MangaHook search: HTTP %d", r.status_code)
-            if r.status_code == 200:
-                data = r.json()
-                results = []
-                for item in data.get("results", []):
-                    results.append(MangaResult(
-                        id=item.get("id", ""),
-                        title=item.get("title", ""),
-                        alt_titles=item.get("alt_titles", []),
-                        description=item.get("description", ""),
-                        status=item.get("status", ""),
-                        year=item.get("year"),
-                        cover_url=item.get("image", item.get("cover_url")),
-                        source="mangakakalot",
-                        original_language="ko",
-                    ))
-                if results:
-                    log.info("Mangakakalot found %d results", len(results))
-                    return results
-            log.warning("Mangakakalot search failed: HTTP %d", r.status_code)
-            return []
+            r = await client.get(url)
+            if r.status_code == 200 and not any(m in r.text for m in _BLOCK_MARKERS):
+                return r.text
+            log.debug("Mangakakalot %s -> HTTP %d", url, r.status_code)
         except Exception as e:
-            log.warning("Mangakakalot search error: %s", e)
-            return []
+            log.debug("Mangakakalot %s error: %s", url, e)
+        return None
+
+    async def search(self, title: str) -> list[MangaResult]:
+        """Search via GET /search/story/{query} (space->underscore)."""
+        slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
+        for domain in DOMAINS:
+            html = await self._fetch(f"{domain}/search/story/{slug}")
+            if not html:
+                continue
+            self._working_domain = domain
+            results = []
+            pattern = re.compile(
+                r'<a[^>]+href="([^"]+)"[^>]*title="([^"]+)"[^>]*>\s*'
+                r'<(?:span|img)[^>]*src="([^"]+)"',
+                re.DOTALL,
+            )
+            seen: set[str] = set()
+            for m in pattern.finditer(html):
+                url, name, img = m.groups()
+                mid = url.rstrip("/").rsplit("/", 1)[-1]
+                if mid in seen:
+                    continue
+                seen.add(mid)
+                results.append(MangaResult(
+                    id=mid,
+                    title=name.strip(),
+                    alt_titles=[],
+                    description="",
+                    status="",
+                    year=None,
+                    cover_url=img,
+                    source="mangakakalot",
+                    original_language="en",
+                ))
+            if results:
+                log.info("Mangakakalot.search('%s') via %s -> %d", title, domain, len(results))
+                return results[:15]
+        log.info("Mangakakalot.search('%s') -> 0 results", title)
+        return []
+
+    async def find_chapter_by_number(self, manga_id: str, chapter_number: str, lang: str) -> Chapter | None:
+        chapters = await self.get_chapters(manga_id, lang)
+        for ch in chapters:
+            if ch.number == chapter_number:
+                return ch
+        try:
+            want = float(chapter_number)
+            for ch in chapters:
+                try:
+                    if float(ch.number) == want:
+                        return ch
+                except ValueError:
+                    pass
+        except ValueError:
+            pass
+        return None
 
     async def get_chapters(self, manga_id: str, lang: str = "en") -> list[Chapter]:
-        """Get chapter list."""
-        try:
-            client = await self._client_get()
-            # Try Mangakakalot API
-            r = await client.get(f"{MK_API}/manga/{manga_id}/chapters")
-            log.info("Mangakakalot get_chapters: HTTP %d for '%s'", r.status_code, manga_id)
-            if r.status_code == 200:
-                data = r.json()
-                chapters = []
-                for item in data.get("chapters", data.get("data", [])):
-                    chapters.append(Chapter(
-                        id=item.get("id", item.get("slug", "")),
-                        number=item.get("number", item.get("chapter", "")),
-                        title=item.get("title", f"Chapter {item.get('number', '?')}"),
-                        volume=item.get("volume"),
-                        pages_count=item.get("pages_count", 0),
-                        translated_language=lang,
-                    ))
-                if chapters:
-                    log.info("Mangakakalot found %d chapters", len(chapters))
-                    return chapters
-            # Fallback to MangaHook
-            r = await client.get(f"{API_BASE}/manga/{manga_id}/chapters")
-            log.info("MangaHook get_chapters: HTTP %d", r.status_code)
-            if r.status_code == 200:
-                data = r.json()
-                chapters = []
-                for item in data.get("chapters", []):
-                    chapters.append(Chapter(
-                        id=item.get("id", ""),
-                        number=item.get("number", ""),
-                        title=item.get("title", ""),
-                        volume=item.get("volume"),
-                        pages_count=item.get("pages_count", 0),
-                        translated_language=lang,
-                    ))
-                return chapters
-            log.warning("Mangakakalot get_chapters failed: HTTP %d", r.status_code)
+        base = self._working_domain or DOMAINS[0]
+        html = await self._fetch(f"{base}/manga/{manga_id}")
+        if not html:
+            # retry remaining domains
+            for d in DOMAINS:
+                if d == base:
+                    continue
+                html = await self._fetch(f"{d}/manga/{manga_id}")
+                if html:
+                    self._working_domain = d
+                    break
+        if not html:
             return []
-        except Exception as e:
-            log.warning("Mangakakalot get_chapters error: %s", e)
-            return []
-        except Exception as e:
-            log.warning("Mangakakalot get_chapters error: %s", e)
-            return []
+        chapters = []
+        pattern = re.compile(r'<a[^>]+href="([^"]+/chapter[^"]*)"[^>]*>([^<]+)</a>', re.I)
+        seen_nums: set[str] = set()
+        for m in pattern.finditer(html):
+            url, title = m.groups()
+            cid = url.rstrip("/").rsplit("/", 1)[-1]
+            num_m = re.search(r"(\d+(?:\.\d+)?)", cid) or re.search(r"(\d+(?:\.\d+)?)", title)
+            number = num_m.group(1) if num_m else cid
+            if number in seen_nums:
+                continue
+            seen_nums.add(number)
+            chapters.append(Chapter(
+                id=cid,
+                number=number,
+                title=title.strip(),
+                volume=None,
+                pages_count=0,
+                translated_language="en",
+            ))
+        chapters.reverse()
+        log.info("Mangakakalot.get_chapters(%s) -> %d", manga_id, len(chapters))
+        return chapters
 
     async def get_pages(self, chapter_id: str) -> list[Page]:
-        """Get page images for chapter."""
-        try:
-            client = await self._client_get()
-            # Try Mangakakalot API
-            r = await client.get(f"{MK_API}/chapter/{chapter_id}")
-            if r.status_code == 200:
-                data = r.json()
-                pages = []
-                for i, url in enumerate(data.get("pages", data.get("images", data.get("data", [])))):
-                    if isinstance(url, dict):
-                        url = url.get("url", url.get("image", url.get("src", "")))
-                    pages.append(Page(
-                        url=url,
-                        index=i,
-                        width=0,
-                        height=0,
-                    ))
-                if pages:
-                    return pages
-            # Fallback to MangaHook
-            r = await client.get(f"{API_BASE}/chapter/{chapter_id}")
-            if r.status_code == 200:
-                data = r.json()
-                pages = []
-                for i, url in enumerate(data.get("pages", data.get("images", []))):
-                    pages.append(Page(
-                        url=url,
-                        index=i,
-                        width=0,
-                        height=0,
-                    ))
-                return pages
-            log.warning("Mangakakalot get_pages failed: HTTP %d", r.status_code)
+        base = self._working_domain or DOMAINS[0]
+        html = await self._fetch(f"{base}/chapter/{chapter_id}")
+        if not html:
             return []
-        except Exception as e:
-            log.warning("Mangakakalot get_pages error: %s", e)
-            return []
+        pages = []
+        pattern = re.compile(r'<img[^>]+src="([^"]+)"[^>]*(?:class="img-loading"|loading="lazy")', re.I)
+        alt = re.compile(r'class="img-loading"[^>]*src="([^"]+)"', re.I)
+        urls = [m.group(1) for m in pattern.finditer(html)] or [m.group(1) for m in alt.finditer(html)]
+        for i, url in enumerate(urls):
+            pages.append(Page(url=url.strip(), index=i, width=0, height=0))
+        log.info("Mangakakalot.get_pages(%s) -> %d pages", chapter_id, len(pages))
+        return pages
 
     async def download_page(self, page: Page) -> bytes:
-        """Download page image."""
-        client = await self._client_get()
+        client = await self._client()
         r = await client.get(page.url)
+        r.raise_for_status()
         return r.content
 
     async def close(self):

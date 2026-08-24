@@ -17,11 +17,25 @@ from bot.utils.telegram_helpers import _bot as get_bot
 
 DASHBOARD_PORT = int(os.environ.get("DASHBOARD_PORT", "8091"))
 STATIC_DIR = Path(__file__).parent / "static"
+# Auth token: if set, all /api/* requests must carry "Authorization: Bearer <token>"
+# or ?token=<token>. Leave empty to disable auth (local-only setups).
+DASHBOARD_TOKEN = os.environ.get("DASHBOARD_TOKEN", "")
 
 # WebSocket connections for real-time updates
 ws_clients: set[web.WebSocketResponse] = set()
 
 logger = logging.getLogger("dashboard")
+
+
+@web.middleware
+async def auth_middleware(request: web.Request, handler):
+    """Bearer-token gate for API routes (static page stays open)."""
+    if DASHBOARD_TOKEN and request.path.startswith("/api/") and request.path != "/api/ws":
+        auth = request.headers.get("Authorization", "")
+        token = auth[7:] if auth.startswith("Bearer ") else request.query.get("token", "")
+        if token != DASHBOARD_TOKEN:
+            return web.json_response({"error": "unauthorized"}, status=401)
+    return await handler(request)
 
 
 # ──────────────────────────────────────────────
@@ -496,6 +510,11 @@ async def logs_handler(request: web.Request) -> web.Response:
 
 async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     """GET /api/ws — WebSocket для real-time обновлений."""
+    if DASHBOARD_TOKEN:
+        auth = request.headers.get("Authorization", "")
+        token = auth[7:] if auth.startswith("Bearer ") else request.query.get("token", "")
+        if token != DASHBOARD_TOKEN:
+            raise web.HTTPUnauthorized()
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     ws_clients.add(ws)
@@ -530,7 +549,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
 # ──────────────────────────────────────────────
 
 def _build_app() -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[auth_middleware])
     # Pages
     app.router.add_get("/", index_handler)
     # API — Overview

@@ -1,11 +1,10 @@
-import json
 from aiogram import Router
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sources.router import SourceRouter as MangaSourceRouter
-from cfg import CONFIG, CONFIG_PATH
+from cfg import CONFIG
 
 router = Router()
 manga_router = MangaSourceRouter()
@@ -14,19 +13,12 @@ manga_router = MangaSourceRouter()
 class AddTitleStates(StatesGroup):
     waiting_search = State()
     choosing_result = State()
-    choosing_lang = State()
 
 
 @router.message(Command("add_title"))
 async def cmd_add_title(message: Message, state: FSMContext):
-    await message.answer("Название тайтла (поиск на Mangakakalot):")
+    await message.answer("🔍 Название тайтла (поиск в английских источниках):")
     await state.set_state(AddTitleStates.waiting_search)
-
-
-class AddTitleStates(StatesGroup):
-    waiting_search = State()
-    choosing_result = State()
-    choosing_lang = State()
 
 
 @router.message(Command("add_title"))
@@ -95,80 +87,50 @@ async def select_title(callback: CallbackQuery, state: FSMContext):
     await state.update_data(manga_name=title_name, source=source_name)
     await callback.answer()
 
-    await callback.message.answer("Проверяю доступные языки...")
-    # Mangakakalot has English chapters, default to Korean original
-    langs = ["ko", "en"]
-    lang_list = "Korean (оригинал), English"
-
-    await state.update_data(manga_id=manga_id, available_langs=langs)
-
-    buttons = []
-    for lang in langs:
-        name_map = {"ko": "Korean (оригинал)", "en": "English", "ru": "Russian", "ja": "Japanese"}
-        buttons.append([InlineKeyboardButton(
-            text=name_map.get(lang, lang),
-            callback_data=f"alang:{lang}"
-        )])
-    if not buttons:
-        buttons = [[InlineKeyboardButton(text="OK", callback_data="alang:ko")]]
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await callback.message.answer(
-        f"Доступные языки: {lang_list}\n\n"
-        f"Какой язык — оригинал (откуда переводить)?",
-        reply_markup=kb,
-    )
-    await state.set_state(AddTitleStates.choosing_lang)
-
-
-@router.callback_query(lambda c: c.data.startswith("alang:"))
-async def select_source_lang(callback: CallbackQuery, state: FSMContext):
-    source_lang = callback.data.split(":", 1)[1]
-    await callback.answer()
-
-    data = await state.get_data()
-    manga_id = data.get("manga_id")
-    source_name = data.get("source", "mangakakalot")
-    if not manga_id:
-        await callback.message.answer(
-            "Сессия добавления тайтла сброшена (бот перезапускался). "
-            "Начни заново: /add_title"
-        )
-        await state.clear()
-        return
-    title_name = data.get("manga_name", f"Mangakakalot:{manga_id[:8]}")
-    await callback.message.answer(f"Ищу главы на языке «{source_lang}»...")
+    await callback.message.answer(f"📖 Загружаю список глав «{title_name}»...")
     source = await manga_router.get(source_name)
-    chapters = await source.get_chapters(manga_id, source_lang)
+    # English aggregator sources serve EN chapters; try requested langs in order.
+    chapters: list = []
+    used_lang = "en"
+    for lang_try in ("en", "ko"):
+        chapters = await source.get_chapters(manga_id, lang_try)
+        if chapters:
+            used_lang = lang_try
+            break
     await source.close()
 
     if not chapters:
-        await callback.message.answer(f"Нет глав на языке «{source_lang}».")
+        await callback.message.answer(
+            f"❌ Главы не найдены для «{title_name}» ({source_name}).\n"
+            f"Попробуй другой вариант из поиска."
+        )
         await state.clear()
         return
 
+    nums = sorted(chapters, key=lambda c: float(c.number) if c.number.replace(".", "", 1).isdigit() else 0)
     title_entry = {
         "name": title_name,
         "manga_id": manga_id,
         "source": source_name,
-        "source_lang": source_lang,
-        "chapters_count": len(chapters),
-        "first_chapter": chapters[0].number if chapters else "",
-        "last_chapter": chapters[-1].number if chapters else "",
+        "source_lang": used_lang,
+        "chapters_count": len(nums),
+        "first_chapter": nums[0].number,
+        "last_chapter": nums[-1].number,
     }
 
     existing = [t.get("manga_id") for t in CONFIG.get("titles", [])]
     if manga_id not in existing:
         CONFIG["titles"].append(title_entry)
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(CONFIG, f, ensure_ascii=False, indent=2)
+        from bot.utils.ops import asave_config
+        await asave_config()
 
     await callback.message.answer(
-        f"Тайтл добавлен!\n\n"
-        f"Mangakakalot ID: {manga_id}\n"
-        f"Язык оригинала: {source_lang}\n"
-        f"Глав: {len(chapters)}\n"
-        f"Диапазон: {chapters[0].number} — {chapters[-1].number}\n\n"
-        f"Используй /translate для перевода."
+        f"✅ <b>Тайтл добавлен!</b>\n\n"
+        f"📖 {title_name}\n"
+        f"🌐 Источник: {source_name} (язык: {used_lang})\n"
+        f"📚 Глав: {len(nums)}  (диапазон {nums[0].number}–{nums[-1].number})\n\n"
+        f"Перевод: /translate или /manga",
+        parse_mode="HTML",
     )
     await state.clear()
 

@@ -3,6 +3,7 @@ import logging
 import os
 import signal
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 import httpx
@@ -14,7 +15,10 @@ from aiogram.types import FSInputFile
 from cfg import TG_BOT_TOKEN, TG_PROXY_URL, REMOTE_SERVER_URL, CONFIG, save_config, validate_config
 from bot.middleware import CommandResetState
 from bot.utils.progress import get_reporter, clear_reporter
+from bot.utils.ops import setup_rotating_logger, cleanup_temp, PAGE_CACHE
+from bot.utils.packaging import pack_chapter_cbz
 from bot.handlers import get_routers
+from bot.handlers.controls import record_chapter_done, record_chapter_failed
 from sources.router import SourceRouter
 from translator.pipeline import TranslationPipeline
 from translator.health import start_health_server, stop_health_server, mark_bot_started, record_error
@@ -24,10 +28,35 @@ bot: Bot | None = None
 
 HTTP_PROXY = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+# Rotating logs: 5MB x3 backups instead of unbounded growth (Kaggle disk!)
+LOG_DIR = Path(os.getenv("DATA_DIR", "cfg")) / "logs"
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[setup_rotating_logger(LOG_DIR / "bot.log")],
+)
 logger = logging.getLogger(__name__)
 
 KEEPALIVE_INTERVAL = 600
+
+
+async def _maintenance_loop():
+    """Hourly housekeeping: stale temp files + expired page cache + old DB rows."""
+    while True:
+        try:
+            await cleanup_temp(max_age_hours=6)
+            await PAGE_CACHE.prune()
+            def _purge():
+                db = TranslationQueueDB()
+                n = db.purge_older_than(days=30)
+                db.close()
+                return n
+            purged = await asyncio.to_thread(_purge)
+            if purged:
+                logger.info("maintenance: purged %d old queue records", purged)
+        except Exception as e:
+            logger.warning("maintenance failed: %s", e)
+        await asyncio.sleep(3600)
 
 
 async def _keepalive():
@@ -153,22 +182,23 @@ async def check_new_chapters(bot: Bot):
                             chat_id,
                             f"❌ {title['name']} — гл. {ch_str}: не удалось перевести",
                         )
+                        record_chapter_failed()
                         clear_reporter(chat_id, manga_id, ch_str)
                         continue
 
-                    zip_path = Path("temp") / f"auto_{manga_id[:8]}_{ch_str}.zip"
-                    zip_path.parent.mkdir(parents=True, exist_ok=True)
-                    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                        for p in page_paths:
-                            zf.write(p, arcname=Path(p).name)
+                    _t0 = time.monotonic()
+                    cbz_path = Path("temp") / f"auto_{manga_id[:8]}_{ch_str}.cbz"
+                    pack_chapter_cbz(page_paths, cbz_path, series=title['name'], chapter=ch_str)
 
                     await bot.send_document(
                         chat_id,
-                        document=FSInputFile(str(zip_path)),
+                        document=FSInputFile(str(cbz_path)),
                         caption=f"{title['name']} — глава {ch_str}",
                     )
 
-                    zip_path.unlink(missing_ok=True)
+                    cbz_path.unlink(missing_ok=True)
+                    record_chapter_done(f"{title['name']} гл.{ch_str}",
+                                        time.monotonic() - _t0, len(page_paths))
 
                     title["last_chapter"] = ch_str
                     title["chapters_count"] = max(
@@ -226,6 +256,13 @@ async def scheduler_loop(bot: Bot):
             record_error()
 
 
+def _queue_series_name(manga_id: str) -> str:
+    for t in CONFIG.get("titles", []):
+        if t.get("manga_id") == manga_id:
+            return t.get("name", manga_id[:8])
+    return manga_id[:8]
+
+
 async def queue_loop(bot: Bot):
     """Process the translation queue every 60 seconds and send results to Telegram."""
     chat_id = CONFIG.get("telegram", {}).get("chat_id")
@@ -271,6 +308,7 @@ async def queue_loop(bot: Bot):
                                 await reporter.update(f"{stage_emoji} Гл. {chapter_number}: {message}")
 
                         pipeline.on_progress(_on_progress)
+                        _t0 = time.monotonic()
                         page_paths = await pipeline.process_chapter(
                             mangadex_manga_id=manga_id,
                             chapter_number=chapter_number,
@@ -278,24 +316,26 @@ async def queue_loop(bot: Bot):
                             target_lang="en",
                             source="mangakakalot",
                         )
+                        _task_elapsed = time.monotonic() - _t0
                         await pipeline.close()
                         if page_paths:
                             db.update_task_status(manga_id, chapter_number, "completed")
                             logger.info(f"Очередь: гл. {chapter_number} переведена")
                             await reporter.finish(f"✅ Гл. {chapter_number}: переведена")
                             clear_reporter(chat_id, manga_id, chapter_number)
+                            record_chapter_done(f"{manga_id[:8]} гл.{chapter_number}",
+                                                _task_elapsed, len(page_paths))
                             if chat_id and bot:
                                 try:
-                                    zip_path = Path("temp") / f"q_{manga_id[:8]}_ch_{chapter_number}.zip"
-                                    zip_path.parent.mkdir(parents=True, exist_ok=True)
-                                    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                                        for p in page_paths:
-                                            zf.write(p, arcname=Path(p).name)
+                                    cbz_path = Path("temp") / f"{manga_id[:8]}_ch_{chapter_number}.cbz"
+                                    pack_chapter_cbz(page_paths, cbz_path,
+                                                     series=_queue_series_name(manga_id),
+                                                     chapter=chapter_number)
                                     await bot.send_document(
-                                        chat_id, document=FSInputFile(str(zip_path)),
+                                        chat_id, document=FSInputFile(str(cbz_path)),
                                         caption=f"Глава {chapter_number} — готова",
                                     )
-                                    zip_path.unlink(missing_ok=True)
+                                    cbz_path.unlink(missing_ok=True)
                                     await bot.send_message(chat_id, f"✅ Глава {chapter_number}: отправлено")
                                 except Exception as e:
                                     logger.exception(f"Очередь: отправка гл. {chapter_number} не удалась: {e}")
@@ -303,6 +343,7 @@ async def queue_loop(bot: Bot):
                                 logger.info(f"Очередь: гл. {chapter_number} готова (chat_id не задан, отправка пропущена)")
                         else:
                             db.update_task_status(manga_id, chapter_number, "failed", "Нет страниц или не удалось перевести")
+                            record_chapter_failed()
                             if chat_id and bot:
                                 try:
                                     await bot.send_message(chat_id, f"❌ Глава {chapter_number}: не удалось перевести")
@@ -417,6 +458,7 @@ async def main():
     asyncio.create_task(scheduler_loop(bot))
     asyncio.create_task(queue_loop(bot))
     asyncio.create_task(startup_translate(bot))
+    asyncio.create_task(_maintenance_loop())
 
     loop = asyncio.get_running_loop()
 
