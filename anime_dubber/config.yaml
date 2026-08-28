@@ -1,0 +1,53 @@
+project:
+  name: anime_dubber
+  version: "0.1.0"
+
+runtime:
+  device: "cuda"
+  sample_rate: 24000
+  work_dir: "./jobs"
+
+benchmark:
+  max_duration_sec: 180
+  min_speakers: 2
+  max_speakers: 6
+
+asr:
+  model: "large-v3-turbo"
+  language: "ja"
+  compute_type: "float16"
+  batch_size: 4
+
+diarization:
+  model: "pyannote/speaker-diarization-community-1"
+
+separation:
+  enabled: true
+  backend: "uvr_mdx"  # uvr_mdx | htdemucs | bs_roformer - benchmark will pick winner
+  sample_rate: 48000
+  channels: 2
+
+tts:
+  backend: "cosyvoice3"
+  model: "FunAudioLLM/Fun-CosyVoice3-0.5B-2512"
+  sample_rate: 24000
+  max_chars: 180
+
+translation:
+  backend: "manual"  # manual for benchmark, nllb|qwen for production after
+  model: "facebook/nllb-200-distilled-600M"
+
+qc:
+  regenerate_max_attempts: 2
+  suspicious_duration_ratio: 1.35
+  critical_duration_ratio: 1.70
+
+qc_asr:
+  model: "medium"
+  language: "ru"
+
+audio:
+  target_lufs: -16.0
+  duck_attenuation_db: 9.0
+  duck_attack_ms: 10
+  duck_release_ms: 150
