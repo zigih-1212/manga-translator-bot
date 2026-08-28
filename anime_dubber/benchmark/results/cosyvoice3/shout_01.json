@@ -1,0 +1,11 @@
+{
+  "id": "shout_01",
+  "text": "СТОЙ!",
+  "success": true,
+  "generation_seconds": 0.09258860000409186,
+  "audio_seconds": 0.8,
+  "rtf": 0.11573575000511482,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\cosyvoice3\\shout_01.wav",
+  "model": "cosyvoice3"
+}

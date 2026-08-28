@@ -1,0 +1,11 @@
+{
+  "id": "neutral_01",
+  "text": "Ты действительно пришёл?",
+  "success": true,
+  "generation_seconds": 0.05472710001049563,
+  "audio_seconds": 1.44,
+  "rtf": 0.038004930562844194,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\f5tts\\neutral_01.wav",
+  "model": "f5tts"
+}

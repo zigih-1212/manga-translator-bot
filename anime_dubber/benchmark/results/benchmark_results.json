@@ -1,0 +1,337 @@
+{
+  "gpu": {
+    "available": false
+  },
+  "reference": "benchmark/reference.wav",
+  "prompts": 10,
+  "results": [
+    {
+      "backend": "cosyvoice3",
+      "load_seconds": 0.0,
+      "gpu_peak_gb": 0.0,
+      "success": 10,
+      "fail": 0,
+      "total_generation_seconds": 0.77,
+      "total_audio_seconds": 14.14,
+      "avg_rtf": 0.054,
+      "results": [
+        {
+          "id": "neutral_01",
+          "status": "ok",
+          "generation_seconds": 0.08300690000760369,
+          "audio_seconds": 1.44,
+          "rtf": 0.0576436805608359
+        },
+        {
+          "id": "neutral_02",
+          "status": "ok",
+          "generation_seconds": 0.03955029998905957,
+          "audio_seconds": 1.7999583333333333,
+          "rtf": 0.021972897514697786
+        },
+        {
+          "id": "happy_01",
+          "status": "ok",
+          "generation_seconds": 0.06141399999614805,
+          "audio_seconds": 1.38,
+          "rtf": 0.04450289854793337
+        },
+        {
+          "id": "sad_01",
+          "status": "ok",
+          "generation_seconds": 0.05164709998643957,
+          "audio_seconds": 1.74,
+          "rtf": 0.029682241371516996
+        },
+        {
+          "id": "angry_01",
+          "status": "ok",
+          "generation_seconds": 0.1099675000004936,
+          "audio_seconds": 2.04,
+          "rtf": 0.05390563725514392
+        },
+        {
+          "id": "shout_01",
+          "status": "ok",
+          "generation_seconds": 0.09258860000409186,
+          "audio_seconds": 0.8,
+          "rtf": 0.11573575000511482
+        },
+        {
+          "id": "whisper_01",
+          "status": "ok",
+          "generation_seconds": 0.071851400018204,
+          "audio_seconds": 1.44,
+          "rtf": 0.04989680556819723
+        },
+        {
+          "id": "laugh_01",
+          "status": "ok",
+          "generation_seconds": 0.07114549999823794,
+          "audio_seconds": 1.26,
+          "rtf": 0.05646468253828408
+        },
+        {
+          "id": "gasp_01",
+          "status": "ok",
+          "generation_seconds": 0.09622710000257939,
+          "audio_seconds": 0.8,
+          "rtf": 0.12028387500322424
+        },
+        {
+          "id": "cry_01",
+          "status": "ok",
+          "generation_seconds": 0.09230499999830499,
+          "audio_seconds": 1.44,
+          "rtf": 0.06410069444326735
+        }
+      ]
+    },
+    {
+      "backend": "omnivoice",
+      "load_seconds": 0.0,
+      "gpu_peak_gb": 0.0,
+      "success": 10,
+      "fail": 0,
+      "total_generation_seconds": 1.04,
+      "total_audio_seconds": 14.14,
+      "avg_rtf": 0.074,
+      "results": [
+        {
+          "id": "neutral_01",
+          "status": "ok",
+          "generation_seconds": 0.08273029999691062,
+          "audio_seconds": 1.44,
+          "rtf": 0.05745159722007682
+        },
+        {
+          "id": "neutral_02",
+          "status": "ok",
+          "generation_seconds": 0.09178749998682179,
+          "audio_seconds": 1.7999583333333333,
+          "rtf": 0.05099423597036327
+        },
+        {
+          "id": "happy_01",
+          "status": "ok",
+          "generation_seconds": 0.06399819999933243,
+          "audio_seconds": 1.38,
+          "rtf": 0.046375507245893066
+        },
+        {
+          "id": "sad_01",
+          "status": "ok",
+          "generation_seconds": 0.09117239998886362,
+          "audio_seconds": 1.74,
+          "rtf": 0.05239793102808254
+        },
+        {
+          "id": "angry_01",
+          "status": "ok",
+          "generation_seconds": 0.11228820000542328,
+          "audio_seconds": 2.04,
+          "rtf": 0.055043235296776113
+        },
+        {
+          "id": "shout_01",
+          "status": "ok",
+          "generation_seconds": 0.05370220000622794,
+          "audio_seconds": 0.8,
+          "rtf": 0.06712775000778493
+        },
+        {
+          "id": "whisper_01",
+          "status": "ok",
+          "generation_seconds": 0.09608610000577755,
+          "audio_seconds": 1.44,
+          "rtf": 0.06672645833734553
+        },
+        {
+          "id": "laugh_01",
+          "status": "ok",
+          "generation_seconds": 0.11623479999252595,
+          "audio_seconds": 1.26,
+          "rtf": 0.09224984126390948
+        },
+        {
+          "id": "gasp_01",
+          "status": "ok",
+          "generation_seconds": 0.14996809998410754,
+          "audio_seconds": 0.8,
+          "rtf": 0.18746012498013442
+        },
+        {
+          "id": "cry_01",
+          "status": "ok",
+          "generation_seconds": 0.18451130000175908,
+          "audio_seconds": 1.44,
+          "rtf": 0.1281328472234438
+        }
+      ]
+    },
+    {
+      "backend": "qwen3",
+      "load_seconds": 0.0,
+      "gpu_peak_gb": 0.0,
+      "success": 10,
+      "fail": 0,
+      "total_generation_seconds": 0.72,
+      "total_audio_seconds": 14.14,
+      "avg_rtf": 0.051,
+      "results": [
+        {
+          "id": "neutral_01",
+          "status": "ok",
+          "generation_seconds": 0.1415749000152573,
+          "audio_seconds": 1.44,
+          "rtf": 0.09831590278837313
+        },
+        {
+          "id": "neutral_02",
+          "status": "ok",
+          "generation_seconds": 0.08504399997764267,
+          "audio_seconds": 1.7999583333333333,
+          "rtf": 0.04724776035240223
+        },
+        {
+          "id": "happy_01",
+          "status": "ok",
+          "generation_seconds": 0.03892809999524616,
+          "audio_seconds": 1.38,
+          "rtf": 0.02820876811249722
+        },
+        {
+          "id": "sad_01",
+          "status": "ok",
+          "generation_seconds": 0.08298910001758486,
+          "audio_seconds": 1.74,
+          "rtf": 0.047694885067577505
+        },
+        {
+          "id": "angry_01",
+          "status": "ok",
+          "generation_seconds": 0.05064889998175204,
+          "audio_seconds": 2.04,
+          "rtf": 0.024827892147917665
+        },
+        {
+          "id": "shout_01",
+          "status": "ok",
+          "generation_seconds": 0.061585099989315495,
+          "audio_seconds": 0.8,
+          "rtf": 0.07698137498664437
+        },
+        {
+          "id": "whisper_01",
+          "status": "ok",
+          "generation_seconds": 0.06564549999893643,
+          "audio_seconds": 1.44,
+          "rtf": 0.04558715277703919
+        },
+        {
+          "id": "laugh_01",
+          "status": "ok",
+          "generation_seconds": 0.061607400013599545,
+          "audio_seconds": 1.26,
+          "rtf": 0.048894761915555196
+        },
+        {
+          "id": "gasp_01",
+          "status": "ok",
+          "generation_seconds": 0.07227020000573248,
+          "audio_seconds": 0.8,
+          "rtf": 0.0903377500071656
+        },
+        {
+          "id": "cry_01",
+          "status": "ok",
+          "generation_seconds": 0.05862219998380169,
+          "audio_seconds": 1.44,
+          "rtf": 0.040709861099862285
+        }
+      ]
+    },
+    {
+      "backend": "f5tts",
+      "load_seconds": 0.0,
+      "gpu_peak_gb": 0.0,
+      "success": 10,
+      "fail": 0,
+      "total_generation_seconds": 0.91,
+      "total_audio_seconds": 14.14,
+      "avg_rtf": 0.064,
+      "results": [
+        {
+          "id": "neutral_01",
+          "status": "ok",
+          "generation_seconds": 0.05472710001049563,
+          "audio_seconds": 1.44,
+          "rtf": 0.038004930562844194
+        },
+        {
+          "id": "neutral_02",
+          "status": "ok",
+          "generation_seconds": 0.060899000003701076,
+          "audio_seconds": 1.7999583333333333,
+          "rtf": 0.03383356096411551
+        },
+        {
+          "id": "happy_01",
+          "status": "ok",
+          "generation_seconds": 0.0386685999983456,
+          "audio_seconds": 1.38,
+          "rtf": 0.02802072463648232
+        },
+        {
+          "id": "sad_01",
+          "status": "ok",
+          "generation_seconds": 0.0717214000178501,
+          "audio_seconds": 1.74,
+          "rtf": 0.04121919541255753
+        },
+        {
+          "id": "angry_01",
+          "status": "ok",
+          "generation_seconds": 0.0936844999960158,
+          "audio_seconds": 2.04,
+          "rtf": 0.04592377450785088
+        },
+        {
+          "id": "shout_01",
+          "status": "ok",
+          "generation_seconds": 0.15538509999169037,
+          "audio_seconds": 0.8,
+          "rtf": 0.19423137498961296
+        },
+        {
+          "id": "whisper_01",
+          "status": "ok",
+          "generation_seconds": 0.1817581999930553,
+          "audio_seconds": 1.44,
+          "rtf": 0.12622097221739953
+        },
+        {
+          "id": "laugh_01",
+          "status": "ok",
+          "generation_seconds": 0.10537759997532703,
+          "audio_seconds": 1.26,
+          "rtf": 0.08363301585343415
+        },
+        {
+          "id": "gasp_01",
+          "status": "ok",
+          "generation_seconds": 0.05956789999618195,
+          "audio_seconds": 0.8,
+          "rtf": 0.07445987499522744
+        },
+        {
+          "id": "cry_01",
+          "status": "ok",
+          "generation_seconds": 0.08385359999374487,
+          "audio_seconds": 1.44,
+          "rtf": 0.05823166666232282
+        }
+      ]
+    }
+  ]
+}

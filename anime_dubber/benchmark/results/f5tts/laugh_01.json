@@ -1,0 +1,11 @@
+{
+  "id": "laugh_01",
+  "text": "Ха-ха... ну ты даёшь.",
+  "success": true,
+  "generation_seconds": 0.10537759997532703,
+  "audio_seconds": 1.26,
+  "rtf": 0.08363301585343415,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\f5tts\\laugh_01.wav",
+  "model": "f5tts"
+}

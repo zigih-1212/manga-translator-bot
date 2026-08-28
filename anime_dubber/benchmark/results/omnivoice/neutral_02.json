@@ -1,0 +1,11 @@
+{
+  "id": "neutral_02",
+  "text": "Я не собирался сюда приходить.",
+  "success": true,
+  "generation_seconds": 0.09178749998682179,
+  "audio_seconds": 1.7999583333333333,
+  "rtf": 0.05099423597036327,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\omnivoice\\neutral_02.wav",
+  "model": "omnivoice"
+}

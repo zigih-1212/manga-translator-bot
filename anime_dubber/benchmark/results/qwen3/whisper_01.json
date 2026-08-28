@@ -1,0 +1,11 @@
+{
+  "id": "whisper_01",
+  "text": "Тише... они нас услышат.",
+  "success": true,
+  "generation_seconds": 0.06564549999893643,
+  "audio_seconds": 1.44,
+  "rtf": 0.04558715277703919,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\qwen3\\whisper_01.wav",
+  "model": "qwen3"
+}

@@ -1,0 +1,11 @@
+{
+  "id": "cry_01",
+  "text": "Я... я больше не могу...",
+  "success": true,
+  "generation_seconds": 0.09230499999830499,
+  "audio_seconds": 1.44,
+  "rtf": 0.06410069444326735,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\cosyvoice3\\cry_01.wav",
+  "model": "cosyvoice3"
+}

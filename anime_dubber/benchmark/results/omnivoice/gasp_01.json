@@ -1,0 +1,11 @@
+{
+  "id": "gasp_01",
+  "text": "Что?!",
+  "success": true,
+  "generation_seconds": 0.14996809998410754,
+  "audio_seconds": 0.8,
+  "rtf": 0.18746012498013442,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\omnivoice\\gasp_01.wav",
+  "model": "omnivoice"
+}

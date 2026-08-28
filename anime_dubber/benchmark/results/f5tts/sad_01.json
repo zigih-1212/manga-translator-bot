@@ -1,0 +1,11 @@
+{
+  "id": "sad_01",
+  "text": "Пожалуйста, не оставляй меня.",
+  "success": true,
+  "generation_seconds": 0.0717214000178501,
+  "audio_seconds": 1.74,
+  "rtf": 0.04121919541255753,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\f5tts\\sad_01.wav",
+  "model": "f5tts"
+}

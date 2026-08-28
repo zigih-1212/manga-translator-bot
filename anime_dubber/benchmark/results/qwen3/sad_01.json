@@ -1,0 +1,11 @@
+{
+  "id": "sad_01",
+  "text": "Пожалуйста, не оставляй меня.",
+  "success": true,
+  "generation_seconds": 0.08298910001758486,
+  "audio_seconds": 1.74,
+  "rtf": 0.047694885067577505,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\qwen3\\sad_01.wav",
+  "model": "qwen3"
+}

@@ -1,0 +1,11 @@
+{
+  "id": "shout_01",
+  "text": "СТОЙ!",
+  "success": true,
+  "generation_seconds": 0.05370220000622794,
+  "audio_seconds": 0.8,
+  "rtf": 0.06712775000778493,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\omnivoice\\shout_01.wav",
+  "model": "omnivoice"
+}

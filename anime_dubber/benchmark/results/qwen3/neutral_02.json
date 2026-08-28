@@ -1,0 +1,11 @@
+{
+  "id": "neutral_02",
+  "text": "Я не собирался сюда приходить.",
+  "success": true,
+  "generation_seconds": 0.08504399997764267,
+  "audio_seconds": 1.7999583333333333,
+  "rtf": 0.04724776035240223,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\qwen3\\neutral_02.wav",
+  "model": "qwen3"
+}
