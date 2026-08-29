@@ -1,0 +1,11 @@
+{
+  "id": "neutral_01",
+  "text": "Ты действительно пришёл?",
+  "success": true,
+  "generation_seconds": 0.08273029999691062,
+  "audio_seconds": 1.44,
+  "rtf": 0.05745159722007682,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\omnivoice\\neutral_01.wav",
+  "model": "omnivoice"
+}

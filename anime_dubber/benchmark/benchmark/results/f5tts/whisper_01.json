@@ -1,0 +1,11 @@
+{
+  "id": "whisper_01",
+  "text": "Тише... они нас услышат.",
+  "success": true,
+  "generation_seconds": 0.1817581999930553,
+  "audio_seconds": 1.44,
+  "rtf": 0.12622097221739953,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\f5tts\\whisper_01.wav",
+  "model": "f5tts"
+}

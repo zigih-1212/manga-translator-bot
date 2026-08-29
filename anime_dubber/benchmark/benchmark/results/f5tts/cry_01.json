@@ -1,0 +1,11 @@
+{
+  "id": "cry_01",
+  "text": "Я... я больше не могу...",
+  "success": true,
+  "generation_seconds": 0.08385359999374487,
+  "audio_seconds": 1.44,
+  "rtf": 0.05823166666232282,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\f5tts\\cry_01.wav",
+  "model": "f5tts"
+}

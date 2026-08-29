@@ -1,0 +1,11 @@
+{
+  "id": "neutral_01",
+  "text": "Ты действительно пришёл?",
+  "success": true,
+  "generation_seconds": 0.08300690000760369,
+  "audio_seconds": 1.44,
+  "rtf": 0.0576436805608359,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\cosyvoice3\\neutral_01.wav",
+  "model": "cosyvoice3"
+}

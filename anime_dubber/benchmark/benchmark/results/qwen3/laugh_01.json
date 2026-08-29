@@ -1,0 +1,11 @@
+{
+  "id": "laugh_01",
+  "text": "Ха-ха... ну ты даёшь.",
+  "success": true,
+  "generation_seconds": 0.061607400013599545,
+  "audio_seconds": 1.26,
+  "rtf": 0.048894761915555196,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\qwen3\\laugh_01.wav",
+  "model": "qwen3"
+}

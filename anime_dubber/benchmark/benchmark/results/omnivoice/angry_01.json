@@ -1,0 +1,11 @@
+{
+  "id": "angry_01",
+  "text": "Ты вообще понимаешь, что натворил?",
+  "success": true,
+  "generation_seconds": 0.11228820000542328,
+  "audio_seconds": 2.04,
+  "rtf": 0.055043235296776113,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\omnivoice\\angry_01.wav",
+  "model": "omnivoice"
+}

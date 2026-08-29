@@ -1,0 +1,11 @@
+{
+  "id": "happy_01",
+  "text": "Я так рада тебя видеть!",
+  "success": true,
+  "generation_seconds": 0.06399819999933243,
+  "audio_seconds": 1.38,
+  "rtf": 0.046375507245893066,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\omnivoice\\happy_01.wav",
+  "model": "omnivoice"
+}

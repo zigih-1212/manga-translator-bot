@@ -1,0 +1,11 @@
+{
+  "id": "cry_01",
+  "text": "Я... я больше не могу...",
+  "success": true,
+  "generation_seconds": 0.18451130000175908,
+  "audio_seconds": 1.44,
+  "rtf": 0.1281328472234438,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\omnivoice\\cry_01.wav",
+  "model": "omnivoice"
+}

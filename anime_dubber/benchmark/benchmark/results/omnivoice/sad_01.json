@@ -1,0 +1,11 @@
+{
+  "id": "sad_01",
+  "text": "Пожалуйста, не оставляй меня.",
+  "success": true,
+  "generation_seconds": 0.09117239998886362,
+  "audio_seconds": 1.74,
+  "rtf": 0.05239793102808254,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\omnivoice\\sad_01.wav",
+  "model": "omnivoice"
+}

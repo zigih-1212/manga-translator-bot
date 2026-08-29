@@ -1,0 +1,11 @@
+{
+  "id": "happy_01",
+  "text": "Я так рада тебя видеть!",
+  "success": true,
+  "generation_seconds": 0.0386685999983456,
+  "audio_seconds": 1.38,
+  "rtf": 0.02802072463648232,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\f5tts\\happy_01.wav",
+  "model": "f5tts"
+}

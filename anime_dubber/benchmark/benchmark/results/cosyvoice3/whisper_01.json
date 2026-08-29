@@ -1,0 +1,11 @@
+{
+  "id": "whisper_01",
+  "text": "Тише... они нас услышат.",
+  "success": true,
+  "generation_seconds": 0.071851400018204,
+  "audio_seconds": 1.44,
+  "rtf": 0.04989680556819723,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\cosyvoice3\\whisper_01.wav",
+  "model": "cosyvoice3"
+}

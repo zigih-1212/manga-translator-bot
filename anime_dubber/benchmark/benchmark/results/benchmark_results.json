@@ -1,0 +1,257 @@
+{
+  "gpu": {
+    "available": false
+  },
+  "reference": "benchmark/reference.wav",
+  "prompts": 10,
+  "results": [
+    {
+      "backend": "cosyvoice3",
+      "load_seconds": 0.0,
+      "gpu_peak_gb": 0.0,
+      "success": 10,
+      "fail": 0,
+      "total_generation_seconds": 0.0,
+      "total_audio_seconds": 14.14,
+      "avg_rtf": null,
+      "results": [
+        {
+          "id": "neutral_01",
+          "status": "cached",
+          "duration": 1.44
+        },
+        {
+          "id": "neutral_02",
+          "status": "cached",
+          "duration": 1.7999583333333333
+        },
+        {
+          "id": "happy_01",
+          "status": "cached",
+          "duration": 1.38
+        },
+        {
+          "id": "sad_01",
+          "status": "cached",
+          "duration": 1.74
+        },
+        {
+          "id": "angry_01",
+          "status": "cached",
+          "duration": 2.04
+        },
+        {
+          "id": "shout_01",
+          "status": "cached",
+          "duration": 0.8
+        },
+        {
+          "id": "whisper_01",
+          "status": "cached",
+          "duration": 1.44
+        },
+        {
+          "id": "laugh_01",
+          "status": "cached",
+          "duration": 1.26
+        },
+        {
+          "id": "gasp_01",
+          "status": "cached",
+          "duration": 0.8
+        },
+        {
+          "id": "cry_01",
+          "status": "cached",
+          "duration": 1.44
+        }
+      ]
+    },
+    {
+      "backend": "omnivoice",
+      "load_seconds": 0.0,
+      "gpu_peak_gb": 0.0,
+      "success": 10,
+      "fail": 0,
+      "total_generation_seconds": 0.0,
+      "total_audio_seconds": 14.14,
+      "avg_rtf": null,
+      "results": [
+        {
+          "id": "neutral_01",
+          "status": "cached",
+          "duration": 1.44
+        },
+        {
+          "id": "neutral_02",
+          "status": "cached",
+          "duration": 1.7999583333333333
+        },
+        {
+          "id": "happy_01",
+          "status": "cached",
+          "duration": 1.38
+        },
+        {
+          "id": "sad_01",
+          "status": "cached",
+          "duration": 1.74
+        },
+        {
+          "id": "angry_01",
+          "status": "cached",
+          "duration": 2.04
+        },
+        {
+          "id": "shout_01",
+          "status": "cached",
+          "duration": 0.8
+        },
+        {
+          "id": "whisper_01",
+          "status": "cached",
+          "duration": 1.44
+        },
+        {
+          "id": "laugh_01",
+          "status": "cached",
+          "duration": 1.26
+        },
+        {
+          "id": "gasp_01",
+          "status": "cached",
+          "duration": 0.8
+        },
+        {
+          "id": "cry_01",
+          "status": "cached",
+          "duration": 1.44
+        }
+      ]
+    },
+    {
+      "backend": "qwen3",
+      "load_seconds": 0.0,
+      "gpu_peak_gb": 0.0,
+      "success": 10,
+      "fail": 0,
+      "total_generation_seconds": 0.0,
+      "total_audio_seconds": 14.14,
+      "avg_rtf": null,
+      "results": [
+        {
+          "id": "neutral_01",
+          "status": "cached",
+          "duration": 1.44
+        },
+        {
+          "id": "neutral_02",
+          "status": "cached",
+          "duration": 1.7999583333333333
+        },
+        {
+          "id": "happy_01",
+          "status": "cached",
+          "duration": 1.38
+        },
+        {
+          "id": "sad_01",
+          "status": "cached",
+          "duration": 1.74
+        },
+        {
+          "id": "angry_01",
+          "status": "cached",
+          "duration": 2.04
+        },
+        {
+          "id": "shout_01",
+          "status": "cached",
+          "duration": 0.8
+        },
+        {
+          "id": "whisper_01",
+          "status": "cached",
+          "duration": 1.44
+        },
+        {
+          "id": "laugh_01",
+          "status": "cached",
+          "duration": 1.26
+        },
+        {
+          "id": "gasp_01",
+          "status": "cached",
+          "duration": 0.8
+        },
+        {
+          "id": "cry_01",
+          "status": "cached",
+          "duration": 1.44
+        }
+      ]
+    },
+    {
+      "backend": "f5tts",
+      "load_seconds": 0.0,
+      "gpu_peak_gb": 0.0,
+      "success": 10,
+      "fail": 0,
+      "total_generation_seconds": 0.0,
+      "total_audio_seconds": 14.14,
+      "avg_rtf": null,
+      "results": [
+        {
+          "id": "neutral_01",
+          "status": "cached",
+          "duration": 1.44
+        },
+        {
+          "id": "neutral_02",
+          "status": "cached",
+          "duration": 1.7999583333333333
+        },
+        {
+          "id": "happy_01",
+          "status": "cached",
+          "duration": 1.38
+        },
+        {
+          "id": "sad_01",
+          "status": "cached",
+          "duration": 1.74
+        },
+        {
+          "id": "angry_01",
+          "status": "cached",
+          "duration": 2.04
+        },
+        {
+          "id": "shout_01",
+          "status": "cached",
+          "duration": 0.8
+        },
+        {
+          "id": "whisper_01",
+          "status": "cached",
+          "duration": 1.44
+        },
+        {
+          "id": "laugh_01",
+          "status": "cached",
+          "duration": 1.26
+        },
+        {
+          "id": "gasp_01",
+          "status": "cached",
+          "duration": 0.8
+        },
+        {
+          "id": "cry_01",
+          "status": "cached",
+          "duration": 1.44
+        }
+      ]
+    }
+  ]
+}

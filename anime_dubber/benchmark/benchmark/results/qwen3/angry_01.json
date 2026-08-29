@@ -1,0 +1,11 @@
+{
+  "id": "angry_01",
+  "text": "Ты вообще понимаешь, что натворил?",
+  "success": true,
+  "generation_seconds": 0.05064889998175204,
+  "audio_seconds": 2.04,
+  "rtf": 0.024827892147917665,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\qwen3\\angry_01.wav",
+  "model": "qwen3"
+}

@@ -1,0 +1,11 @@
+{
+  "id": "whisper_01",
+  "text": "Тише... они нас услышат.",
+  "success": true,
+  "generation_seconds": 0.09608610000577755,
+  "audio_seconds": 1.44,
+  "rtf": 0.06672645833734553,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\omnivoice\\whisper_01.wav",
+  "model": "omnivoice"
+}

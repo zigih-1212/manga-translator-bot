@@ -1,0 +1,11 @@
+{
+  "id": "shout_01",
+  "text": "СТОЙ!",
+  "success": true,
+  "generation_seconds": 0.061585099989315495,
+  "audio_seconds": 0.8,
+  "rtf": 0.07698137498664437,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\qwen3\\shout_01.wav",
+  "model": "qwen3"
+}

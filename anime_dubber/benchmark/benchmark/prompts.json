@@ -1,0 +1,73 @@
+[
+  {
+    "id": "neutral_01",
+    "text": "Ты действительно пришёл?",
+    "category": "neutral",
+    "emotion": "neutral",
+    "expected_duration_sec": 2.0
+  },
+  {
+    "id": "neutral_02",
+    "text": "Я не собирался сюда приходить.",
+    "category": "neutral",
+    "emotion": "neutral",
+    "expected_duration_sec": 2.5
+  },
+  {
+    "id": "happy_01",
+    "text": "Я так рада тебя видеть!",
+    "category": "happy",
+    "emotion": "happy",
+    "expected_duration_sec": 1.8
+  },
+  {
+    "id": "sad_01",
+    "text": "Пожалуйста, не оставляй меня.",
+    "category": "sad",
+    "emotion": "sad",
+    "expected_duration_sec": 2.2
+  },
+  {
+    "id": "angry_01",
+    "text": "Ты вообще понимаешь, что натворил?",
+    "category": "angry",
+    "emotion": "angry",
+    "expected_duration_sec": 2.5
+  },
+  {
+    "id": "shout_01",
+    "text": "СТОЙ!",
+    "category": "shout",
+    "emotion": "angry",
+    "expected_duration_sec": 0.8
+  },
+  {
+    "id": "whisper_01",
+    "text": "Тише... они нас услышат.",
+    "category": "whisper",
+    "emotion": "fear",
+    "expected_duration_sec": 2.0
+  },
+  {
+    "id": "laugh_01",
+    "text": "Ха-ха... ну ты даёшь.",
+    "category": "laugh",
+    "emotion": "happy",
+    "expected_duration_sec": 1.8
+  },
+  {
+    "id": "gasp_01",
+    "text": "Что?!",
+    "category": "gasp",
+    "emotion": "surprise",
+    "expected_duration_sec": 0.6
+  },
+  {
+    "id": "cry_01",
+    "text": "Я... я больше не могу...",
+    "category": "cry",
+    "emotion": "sad",
+    "expected_duration_sec": 3.5,
+    "tags": ["breath", "sob"]
+  }
+]

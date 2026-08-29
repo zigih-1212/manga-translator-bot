@@ -1,0 +1,11 @@
+{
+  "id": "laugh_01",
+  "text": "Ха-ха... ну ты даёшь.",
+  "success": true,
+  "generation_seconds": 0.11623479999252595,
+  "audio_seconds": 1.26,
+  "rtf": 0.09224984126390948,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\omnivoice\\laugh_01.wav",
+  "model": "omnivoice"
+}

@@ -1,0 +1,11 @@
+{
+  "id": "gasp_01",
+  "text": "Что?!",
+  "success": true,
+  "generation_seconds": 0.05956789999618195,
+  "audio_seconds": 0.8,
+  "rtf": 0.07445987499522744,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\f5tts\\gasp_01.wav",
+  "model": "f5tts"
+}

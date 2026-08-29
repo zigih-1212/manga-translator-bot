@@ -1,0 +1,11 @@
+{
+  "id": "gasp_01",
+  "text": "Что?!",
+  "success": true,
+  "generation_seconds": 0.09622710000257939,
+  "audio_seconds": 0.8,
+  "rtf": 0.12028387500322424,
+  "sample_rate": 24000,
+  "output_path": "benchmark\\results\\cosyvoice3\\gasp_01.wav",
+  "model": "cosyvoice3"
+}
